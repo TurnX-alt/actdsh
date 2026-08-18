@@ -30,8 +30,10 @@ app.on('second-instance', () => {
 });
 
 function resourcesBase() {
+  // extraResources 以 from=项目根、filter=runtime/** 拷入：打包内实际落点为 resources/dsh/runtime/。
+  // （electron-builder 硬性排除任何拷贝源的根级 node_modules，故运行时载荷必须嵌套一层。）
   return app.isPackaged
-    ? path.join(process.resourcesPath, 'dsh')
+    ? path.join(process.resourcesPath, 'dsh', 'runtime')
     : path.join(__dirname, 'runtime');
 }
 
