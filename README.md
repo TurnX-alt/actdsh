@@ -10,8 +10,8 @@
 
 | 系统 | 文件 | 形态 |
 |------|------|------|
-| Windows 10/11（x64） | `actdsh-windows-x64-<版本>.exe` | 便携版，双击即运行，不写注册表 |
-| macOS（Apple Silicon） | `actdsh-macos-arm64-<版本>.dmg` | 拖入"应用程序"即完成安装 |
+| Windows 10/11（x64） | `actdsh-win-x64-<版本>.exe` | 便携版，双击即运行，不写注册表 |
+| macOS（Apple Silicon） | `actdsh-mac-arm64-<版本>.dmg` | 拖入"应用程序"即完成安装 |
 
 ## 首次运行（重要：未签名说明）
 
@@ -25,7 +25,16 @@
 1. 启动应用后，窗口会显示"正在启动 dsh 服务…"，数秒后自动进入 DSH 图形界面（与 `dsh web` 完全相同）。
 2. 窗口关闭即停止后台 dsh 服务并退出。
 3. 桌面版包含 dsh 的**全部原生功能**；如需命令行，可进入应用安装目录，在 `resources/dsh/` 中找到完整 `dsh` CLI 使用。
-4. 若系统浏览器也自动打开了 DSH 页面，属上游 `dsh web` 的原生行为，关闭多余标签页即可，不影响窗口内使用。
+4. 插件管理与官方一致（`dsh plugin`）：包内已内置 pnpm 并自动注入，**无需自行安装** Node.js / npm / pnpm。
+5. 你的配置、会话记录、技能与插件全部保存在官方默认目录 `~/.dsh`（Windows：`C:\Users\<你>\.dsh`；macOS：`~/.dsh`），与官方版完全通用。
+
+## 零环境依赖
+
+桌面版面向"官方方案启动失败/没有开发环境"的用户：**不需要**预先安装 Node.js、npm、pnpm 或特定浏览器——
+
+- 应用内嵌 Node 运行时（复用 Electron 内嵌 Node）与 Chromium 窗口；
+- 端口自动回退：默认 3080 被占用时自动尝试 3081–3099，仍被占则自动分配空闲端口，与官方版可并存运行；
+- 插件安装所需的 pnpm 已随包内置。
 
 ## 更新机制
 
@@ -55,7 +64,10 @@
 产物由 GitHub Actions 从公开源码与 npm 官方包自动构建，构建日志全程公开可查（Actions 页面）。如有顾虑可自行审查 workflow：`.github/workflows/release-desktop.yml`。
 
 **端口冲突？**
-dsh 默认监听 `127.0.0.1:3080`。若该端口被占用，应用会提示启动失败；请先释放端口。
+无需处理：应用会自动回退到空闲端口（3081–3099 或系统分配），与已运行的官方版实例互不干扰。
+
+**启动失败怎么办？**
+应用会弹窗提示，并将 dsh 日志写入用户数据目录（Windows：`%APPDATA%\actdsh\dsh.log`；macOS：`~/Library/Application Support/actdsh/dsh.log`），反馈问题时请附上该文件。
 
 **支持 Linux / Intel Mac / Windows arm64 吗？**
 暂不支持，后续视需求扩展。

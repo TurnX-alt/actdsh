@@ -1,83 +1,157 @@
 // actdsh 桌面壳主进程。
-// 职责仅限：以内嵌 Node 拉起上游 dsh web，等待就绪后在窗口中加载 GUI。
+// 职责仅限：以内嵌 Node 拉起上游 dsh web，等待官方就绪信号后在窗口中加载 GUI。
+// 面向零环境用户：自带 Node（ELECTRON_RUN_AS_NODE）与 pnpm 垫片，端口自动回退，
 // 不向上游传递任何未证实的参数，不添加任何新功能。
 const { app, BrowserWindow, dialog } = require('electron');
 const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const net = require('node:net');
 const path = require('node:path');
-const http = require('node:http');
 
-const GUI_ORIGIN = 'http://127.0.0.1:3080';
-const READY_TIMEOUT_MS = 60000;
+// dsh 官方默认端口为 3080；被打包版用户可能残留冲突进程，故依次回退 3081-3099，最后交给 OS 分配（0）。
+const PORT_CANDIDATES = [];
+for (let p = 3080; p <= 3099; p += 1) PORT_CANDIDATES.push(p);
+const READY_TIMEOUT_MS = 90000;
+// 官方就绪信号：stdout 打印 "dsh web: http://127.0.0.1:<port>"。
+const URL_PATTERN = /dsh web: (https?:\/\/\S+)/;
 
 let dshChild = null;
 let mainWindow = null;
+let logStream = null;
 
-// 单实例：避免第二次启动时端口冲突。
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
 
-function resolveDshBin() {
-  const base = app.isPackaged
+function resourcesBase() {
+  return app.isPackaged
     ? path.join(process.resourcesPath, 'dsh')
     : path.join(__dirname, 'runtime');
-  return path.join(base, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
 }
 
-function startDsh() {
-  // 复用 Electron 内嵌的 Node 运行时（ELECTRON_RUN_AS_NODE），不单独分发 Node。
-  dshChild = spawn(process.execPath, [resolveDshBin(), 'web'], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+function resolveDshBin() {
+  return path.join(resourcesBase(), 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js');
+}
+
+function resolvePnpmCjs() {
+  return path.join(resourcesBase(), 'node_modules', 'pnpm', 'bin', 'pnpm.cjs');
+}
+
+// dsh 的插件管理（dsh plugin）是 pnpm 的前转器，会 spawnSync('pnpm')。
+// 为零环境用户内置 pnpm：在 userData/shims 生成垫片脚本，仅对子进程 PATH 前置注入。
+function ensurePnpmShims() {
+  const shimDir = path.join(app.getPath('userData'), 'shims');
+  fs.mkdirSync(shimDir, { recursive: true });
+  const pnpmCjs = resolvePnpmCjs();
+  if (process.platform === 'win32') {
+    // spawnSync(..., { shell: true }) 经 cmd 解析，.cmd 垫片可被命中。
+    fs.writeFileSync(path.join(shimDir, 'pnpm.cmd'),
+      '@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"' + process.execPath + '" "' + pnpmCjs + '" %*\r\n');
+  } else {
+    const shim = path.join(shimDir, 'pnpm');
+    fs.writeFileSync(shim,
+      '#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "' + process.execPath + '" "' + pnpmCjs + '" "$@"\n');
+    fs.chmodSync(shim, 0o755);
+  }
+  return shimDir;
+}
+
+function probeFree(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.listen(port, '127.0.0.1', () => server.close(() => resolve(true)));
+  });
+}
+
+async function pickPort() {
+  for (const port of PORT_CANDIDATES) {
+    if (await probeFree(port)) return port;
+  }
+  return 0; // OS 分配；实际端口从官方 URL 就绪行解析。
+}
+
+function openLog() {
+  const logPath = path.join(app.getPath('userData'), 'dsh.log');
+  logStream = fs.createWriteStream(logPath, { flags: 'w' });
+  return logPath;
+}
+
+function startDsh(port, logPath) {
+  const shimDir = ensurePnpmShims();
+  const env = {
+    ...process.env,
+    ELECTRON_RUN_AS_NODE: '1',
+    PATH: shimDir + path.delimiter + (process.env.PATH ?? process.env.Path ?? ''),
+  };
+  dshChild = spawn(process.execPath, [resolveDshBin(), 'web', '--port', String(port)], {
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  dshChild.stdout.on('data', (chunk) => console.log('[dsh]', chunk.toString().trimEnd()));
-  dshChild.stderr.on('data', (chunk) => console.error('[dsh]', chunk.toString().trimEnd()));
+  const onChunk = (chunk) => {
+    const text = chunk.toString();
+    logStream.write(text);
+    process.stdout.write(text);
+  };
+  dshChild.stdout.on('data', onChunk);
+  dshChild.stderr.on('data', onChunk);
   dshChild.on('exit', (code) => {
     if (!app.isQuitting) {
-      dialog.showErrorBox('dsh 服务已退出', '后台 dsh 进程异常退出（退出码 ' + code + '）。应用将关闭。');
+      dialog.showErrorBox('dsh 服务已退出',
+        '后台 dsh 进程异常退出（退出码 ' + code + '）。\n日志：' + logPath);
       app.quit();
     }
   });
 }
 
-function waitReady(deadline) {
+// 等待官方 URL 就绪行；它是加载窗口的唯一权威依据（端口 0 时尤其如此）。
+function waitReadyUrl() {
   return new Promise((resolve, reject) => {
-    const probe = () => {
-      const req = http.get(GUI_ORIGIN, (res) => {
-        res.resume();
-        resolve();
-      });
-      req.on('error', () => {
-        if (Date.now() > deadline) {
-          reject(new Error('等待 dsh 服务就绪超时（' + GUI_ORIGIN + '）。请确认 3080 端口未被占用。'));
-        } else {
-          setTimeout(probe, 500);
-        }
-      });
-      req.setTimeout(1000, () => req.destroy(new Error('probe timeout')));
-    };
-    probe();
+    let buffer = '';
+    const timer = setTimeout(() => {
+      reject(new Error('等待 dsh 服务就绪超时。\n日志：' + path.join(app.getPath('userData'), 'dsh.log')));
+    }, READY_TIMEOUT_MS);
+    dshChild.stdout.on('data', (chunk) => {
+      buffer += chunk.toString();
+      const match = URL_PATTERN.exec(buffer);
+      if (match) {
+        clearTimeout(timer);
+        resolve(match[1]);
+      }
+    });
+    dshChild.once('exit', () => {
+      clearTimeout(timer);
+      reject(new Error('dsh 服务在就绪前退出。\n日志：' + path.join(app.getPath('userData'), 'dsh.log')));
+    });
   });
 }
 
-async function createMainWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    title: 'actdsh',
-    autoHideMenuBar: true,
-  });
-  mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
-    '<body style="font-family:sans-serif;display:flex;height:100vh;align-items:center;justify-content:center">' +
-    '<p>正在启动 dsh 服务…</p></body>'));
-  await waitReady(Date.now() + READY_TIMEOUT_MS);
-  await mainWindow.loadURL(GUI_ORIGIN);
+function loadingHtml(message) {
+  return 'data:text/html;charset=utf-8,' + encodeURIComponent(
+    '<body style="font-family:sans-serif;display:flex;height:100vh;align-items:center;justify-content:center;margin:0">' +
+    '<div style="text-align:center;color:#444"><h2>actdsh</h2><p>' + message + '</p></div></body>');
 }
 
 app.whenReady().then(async () => {
-  startDsh();
+  const logPath = openLog();
   try {
-    await createMainWindow();
+    const port = await pickPort();
+    mainWindow = new BrowserWindow({
+      width: 1440,
+      height: 900,
+      title: 'actdsh',
+      autoHideMenuBar: true,
+    });
+    await mainWindow.loadURL(loadingHtml('正在启动 dsh 服务（端口 ' + (port || '自动分配') + '）…'));
+    startDsh(port, logPath);
+    const url = await waitReadyUrl();
+    await mainWindow.loadURL(url);
   } catch (err) {
     dialog.showErrorBox('启动失败', String(err && err.message ? err.message : err));
     app.quit();
@@ -90,7 +164,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   app.isQuitting = true;
-  if (dshChild && !dshChild.killed) {
-    dshChild.kill();
-  }
+  if (dshChild && !dshChild.killed) dshChild.kill();
+  if (logStream) logStream.end();
 });

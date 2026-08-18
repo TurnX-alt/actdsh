@@ -86,6 +86,11 @@ jobs:
         working-directory: shell/runtime
         run: npm install --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
 
+      # dsh plugin 是 pnpm 前转器；为零环境用户把 pnpm 一并打进包内（壳在运行时生成 PATH 垫片）。
+      - name: 内置 pnpm
+        working-directory: shell/runtime
+        run: npm install --no-audit --no-fund pnpm
+
       - name: 壳版本号对齐上游
         working-directory: shell
         run: npm pkg set "version=$DSH_VERSION"
@@ -98,7 +103,9 @@ jobs:
         working-directory: shell
         env:
           ELECTRON_RUN_AS_NODE: 1
-        run: ./node_modules/.bin/electron "runtime/node_modules/@deepseek-ai/dsh/lib/bin.js" --help > /dev/null
+        run: |
+          ./node_modules/.bin/electron "runtime/node_modules/@deepseek-ai/dsh/lib/bin.js" --help > /dev/null
+          test -f runtime/node_modules/pnpm/bin/pnpm.cjs
 
       - name: electron-builder 打包
         working-directory: shell
