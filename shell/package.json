@@ -1,0 +1,46 @@
+{
+  "name": "actdsh-shell",
+  "productName": "actdsh",
+  "description": "DeepSeek Harness 桌面壳（Electron），仅包装 dsh 原生功能",
+  "version": "0.0.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "smoke": "electron runtime/node_modules/@deepseek-ai/dsh/lib/bin.js --help",
+    "pack": "electron-builder --publish never"
+  },
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "io.github.turnx-alt.actdsh",
+    "productName": "actdsh",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "runtime",
+        "to": "dsh"
+      }
+    ],
+    "artifactName": "actdsh-${os}-${arch}-${version}.${ext}",
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        "portable"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools"
+    }
+  }
+}

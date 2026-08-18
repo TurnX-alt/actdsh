@@ -1,0 +1,6 @@
+node_modules/
+dist/
+shell/runtime/node_modules/
+docs.local/
+*.log
+.DS_Store

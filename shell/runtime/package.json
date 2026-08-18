@@ -1,0 +1,6 @@
+{
+  "name": "actdsh-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "构建期注入：GitHub Actions 在此目录 npm 安装上游 @deepseek-ai/dsh@<版本>"
+}

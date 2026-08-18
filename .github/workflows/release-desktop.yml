@@ -1,0 +1,153 @@
+# actdsh 桌面版发布流水线。
+# 订阅 deepseek-ai/deepseek-harness 的 dsh-v* 新 tag，打包 Win/macOS 桌面版并同步发布到本仓库 Releases。
+# 设计约束：轮询秒级空转退出；构建仅在有新版本时触发；不使用任何外部服务或外部状态。
+name: 桌面版发布
+
+on:
+  schedule:
+    # 每日 UTC 03:23（避开整点高峰；GitHub cron 允许 5-30 分钟延迟，日粒度下无影响）
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 强制构建指定上游 tag（如 dsh-v0.1.0-rc.7；留空则自动探测最新）
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    name: 探测上游新 tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - name: 比对上游最新 dsh release 与本仓库已发布 tag
+        id: check
+        run: |
+          set -euo pipefail
+          forced='${{ inputs.tag }}'
+          if [ -n "$forced" ]; then
+            tag="$forced"
+          else
+            tag=$(gh api repos/deepseek-ai/deepseek-harness/releases --jq 'map(select((.draft | not) and (.tag_name | startswith("dsh-v")))) | .[0].tag_name // empty')
+          fi
+          if [ -z "$tag" ]; then
+            echo '上游暂无 dsh-v* release，本轮空转退出。'
+            exit 0
+          fi
+          if [ -z "$forced" ] && gh release view "$tag" --repo '${{ github.repository }}' >/dev/null 2>&1; then
+            echo "$tag 已发布过，本轮空转退出。"
+            exit 0
+          fi
+          prerelease=$(gh api "repos/deepseek-ai/deepseek-harness/releases/tags/$tag" --jq '.prerelease' 2>/dev/null || echo true)
+          version="${tag#dsh-v}"
+          echo "发现待打包版本: $tag (version=$version, prerelease=$prerelease)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: 构建 ${{ matrix.name }}
+    needs: poll
+    if: needs.poll.outputs.tag != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64, os: windows-latest }
+          - { name: macos-arm64, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      DSH_VERSION: ${{ needs.poll.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: 安装上游 dsh
+        working-directory: shell/runtime
+        run: npm install --no-audit --no-fund "@deepseek-ai/dsh@$DSH_VERSION"
+
+      - name: 壳版本号对齐上游
+        working-directory: shell
+        run: npm pkg set "version=$DSH_VERSION"
+
+      - name: 安装壳依赖（electron + electron-builder）
+        working-directory: shell
+        run: npm install --no-audit --no-fund
+
+      - name: 冒烟验证（Electron 内嵌 Node 拉起 dsh CLI）
+        working-directory: shell
+        env:
+          ELECTRON_RUN_AS_NODE: 1
+        run: ./node_modules/.bin/electron "runtime/node_modules/@deepseek-ai/dsh/lib/bin.js" --help > /dev/null
+
+      - name: electron-builder 打包
+        working-directory: shell
+        run: ./node_modules/.bin/electron-builder --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.name }}
+          path: |
+            shell/dist/*.exe
+            shell/dist/*.dmg
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: 聚合发布 ${{ needs.poll.outputs.tag }}
+    needs: [poll, build]
+    if: needs.poll.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.poll.outputs.tag }}
+      PRERELEASE: ${{ needs.poll.outputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pkg-*
+          merge-multiple: true
+          path: dist
+
+      - name: 生成 release notes（含上游发布说明）
+        run: |
+          set -euo pipefail
+          {
+            echo "对应上游 [deepseek-ai/deepseek-harness $TAG](https://github.com/deepseek-ai/deepseek-harness/releases/tag/$TAG)。"
+            echo
+            echo '## 上游发布说明'
+            echo
+            gh api "repos/deepseek-ai/deepseek-harness/releases/tags/$TAG" --jq '.body // "（上游未填写发布说明）"'
+            echo
+            echo '## 安装与运行'
+            echo
+            echo '参见 [README](https://github.com/${{ github.repository }}#readme)（含未签名放行步骤）。'
+          } > notes.md
+
+      - name: 创建 release 并一次性挂齐全部产物
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "$PRERELEASE" = 'true' ]; then args+=(--prerelease); fi
+          gh release create "$TAG" --repo '${{ github.repository }}' --title "$TAG" --notes-file notes.md "${args[@]}" dist/*
