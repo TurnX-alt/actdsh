@@ -11,7 +11,7 @@ const path = require('node:path');
 // dsh 官方默认端口为 3080；被打包版用户可能残留冲突进程，故依次回退 3081-3099，最后交给 OS 分配（0）。
 const PORT_CANDIDATES = [];
 for (let p = 3080; p <= 3099; p += 1) PORT_CANDIDATES.push(p);
-const READY_TIMEOUT_MS = 90000;
+const READY_TIMEOUT_MS = 180000; // 首启含 profile 初始化与安全软件扫描，慢机留足余量
 // 官方就绪信号：stdout 打印 "dsh web: http://127.0.0.1:<port>"。
 const URL_PATTERN = /dsh web: (https?:\/\/\S+)/;
 
@@ -80,7 +80,9 @@ async function pickPort() {
 }
 
 function openLog() {
-  const logPath = path.join(app.getPath('userData'), 'dsh.log');
+  const dir = app.getPath('userData');
+  fs.mkdirSync(dir, { recursive: true });
+  const logPath = path.join(dir, 'dsh.log');
   logStream = fs.createWriteStream(logPath, { flags: 'w' });
   return logPath;
 }
@@ -103,6 +105,12 @@ function startDsh(port, logPath) {
   };
   dshChild.stdout.on('data', onChunk);
   dshChild.stderr.on('data', onChunk);
+  dshChild.on('error', (err) => {
+    if (!app.isQuitting) {
+      dialog.showErrorBox('dsh 服务启动失败', String(err && err.message ? err.message : err) + '\n日志：' + logPath);
+      app.quit();
+    }
+  });
   dshChild.on('exit', (code) => {
     if (!app.isQuitting) {
       dialog.showErrorBox('dsh 服务已退出',
@@ -134,10 +142,9 @@ function waitReadyUrl() {
   });
 }
 
-function loadingHtml(message) {
-  return 'data:text/html;charset=utf-8,' + encodeURIComponent(
-    '<body style="font-family:sans-serif;display:flex;height:100vh;align-items:center;justify-content:center;margin:0">' +
-    '<div style="text-align:center;color:#444"><h2>actdsh</h2><p>' + message + '</p></div></body>');
+// 就绪前的加载页：本地文件（便携版运行环境下 data: URL 加载实测不稳定，故不采用）。
+function loadingFile() {
+  return path.join(__dirname, 'loading.html');
 }
 
 app.whenReady().then(async () => {
@@ -150,12 +157,14 @@ app.whenReady().then(async () => {
       title: 'actdsh',
       autoHideMenuBar: true,
     });
-    await mainWindow.loadURL(loadingHtml('正在启动 dsh 服务（端口 ' + (port || '自动分配') + '）…'));
+    await mainWindow.loadFile(loadingFile());
     startDsh(port, logPath);
     const url = await waitReadyUrl();
     await mainWindow.loadURL(url);
   } catch (err) {
     dialog.showErrorBox('启动失败', String(err && err.message ? err.message : err));
+    app.isQuitting = true;
+    if (dshChild && !dshChild.killed) dshChild.kill();
     app.quit();
   }
 });

@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>actdsh</title>
+<style>
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; display: flex; height: 100vh; align-items: center; justify-content: center; margin: 0; background: #fafafa; }
+  .box { text-align: center; color: #444; }
+  h2 { margin-bottom: 8px; }
+  .spin { width: 28px; height: 28px; margin: 16px auto 0; border: 3px solid #ddd; border-top-color: #666; border-radius: 50%; animation: r 0.9s linear infinite; }
+  @keyframes r { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div class="box">
+    <h2>actdsh</h2>
+    <p id="msg">正在启动 dsh 服务…</p>
+    <div class="spin"></div>
+  </div>
+</body>
+</html>
