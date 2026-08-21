@@ -39,8 +39,13 @@
     "npmRebuild": false,
     "win": {
       "target": [
-        "portable"
+        "nsis"
       ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true
     },
     "mac": {
       "target": [
@@ -49,20 +54,24 @@
       "category": "public.app-category.developer-tools"
     },
     "dmg": {
+      "window": {
+        "width": 640,
+        "height": 440
+      },
       "contents": [
         {
-          "x": 130,
-          "y": 200
+          "x": 120,
+          "y": 170
         },
         {
-          "x": 530,
-          "y": 200,
+          "x": 520,
+          "y": 170,
           "type": "link",
           "path": "/Applications"
         },
         {
-          "x": 330,
-          "y": 390,
+          "x": 320,
+          "y": 330,
           "type": "file",
           "path": "build/双击我完成安装.command"
         }

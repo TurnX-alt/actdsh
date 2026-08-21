@@ -130,7 +130,12 @@ jobs:
           READY=""
           if [ "$RUNNER_OS" = "Windows" ]; then
             EXE=$(ls shell/dist/*.exe | head -1)
-            "$EXE" &
+            # 与用户同款安装器：NSIS 静默安装到 %LocalAppData%\Programs，再从安装位置启动。
+            "$EXE" /S
+            INSTALLED="$(cygpath "$LOCALAPPDATA")/Programs/actdsh/actdsh.exe"
+            for i in $(seq 1 36); do [ -f "$INSTALLED" ] && break; sleep 5; done
+            [ -f "$INSTALLED" ] || { echo "::error::NSIS 安装 180 秒内未完成"; exit 1; }
+            "$INSTALLED" &
             LOG_DIR="$(cygpath "$APPDATA")/actdsh"
             for i in $(seq 1 72); do
               if [ -f "$LOG_DIR/dsh.log" ] && grep -q 'dsh web:' "$LOG_DIR/dsh.log"; then

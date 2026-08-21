@@ -97,6 +97,8 @@ function startDsh(port, logPath) {
   dshChild = spawn(process.execPath, [resolveDshBin(), 'web', '--port', String(port)], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
+    // POSIX 下让子进程成为进程组组长，退出时可整组回收（dsh 会再派生沙箱/worker 子进程）。
+    detached: process.platform !== 'win32',
   });
   const onChunk = (chunk) => {
     const text = chunk.toString();
@@ -118,6 +120,20 @@ function startDsh(port, logPath) {
       app.quit();
     }
   });
+}
+
+// 退出时整树回收后台 dsh：只杀直接子进程会留下 dsh 自己派生的孙进程（用户实测"关窗后半天清不干净"）。
+function killDshTree() {
+  if (!dshChild || dshChild.pid === undefined) return;
+  const pid = dshChild.pid;
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      try { process.kill(-pid, 'SIGTERM'); } catch { dshChild.kill(); }
+      setTimeout(() => { try { process.kill(-pid, 'SIGKILL'); } catch { /* 已退出 */ } }, 3000);
+    }
+  } catch { /* 进程已不存在 */ }
 }
 
 // 等待官方 URL 就绪行；它是加载窗口的唯一权威依据（端口 0 时尤其如此）。
@@ -181,6 +197,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   app.isQuitting = true;
-  if (dshChild && !dshChild.killed) dshChild.kill();
+  killDshTree();
   if (logStream) logStream.end();
 });
