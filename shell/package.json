@@ -1,5 +1,5 @@
 {
-  "name": "actdsh-shell",
+  "name": "actdsh",
   "productName": "actdsh",
   "description": "DeepSeek Harness 桌面壳（Electron），仅包装 dsh 原生功能",
   "version": "0.0.0",
