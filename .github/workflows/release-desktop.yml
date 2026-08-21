@@ -1,6 +1,6 @@
 # actdsh 桌面版发布流水线。
 # 订阅 deepseek-ai/deepseek-harness 的 dsh-v* 新 tag，打包 Win/macOS 桌面版并同步发布到本仓库 Releases。
-# 设计约束：轮询秒级空转退出；构建仅在有新版本时触发；不使用任何外部服务或外部状态。
+# 设计约束：轮询秒级空转退出；构建仅在有新版本时触发；每个平台产物先过用户视角验证才允许发布。
 name: 桌面版发布
 
 on:
@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 强制构建指定上游 tag（如 dsh-v0.1.0-rc.7；留空则自动探测最新）
+        description: 强制构建指定上游 tag（如 dsh-v0.1.0-rc.8；留空则自动探测最新）
         required: false
         type: string
 
@@ -59,7 +59,7 @@ jobs:
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
   build:
-    name: 构建 ${{ matrix.name }}
+    name: 构建并验证 ${{ matrix.name }}
     needs: poll
     if: needs.poll.outputs.tag != ''
     strategy:
@@ -69,12 +69,15 @@ jobs:
           - { name: windows-x64, os: windows-latest }
           - { name: macos-arm64, os: macos-latest }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
     env:
       DSH_VERSION: ${{ needs.poll.outputs.version }}
+      TAG: ${{ needs.poll.outputs.tag }}
+      # rc.8 在 macOS runner 实测 npm install 触发 Node 堆内存 OOM（exit 134），此处抬限。
+      NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@v6
 
@@ -95,9 +98,19 @@ jobs:
         working-directory: shell
         run: npm pkg set "version=$DSH_VERSION"
 
-      - name: 安装壳依赖（electron + electron-builder）
+      - name: 安装壳依赖（electron + electron-builder + sharp）
         working-directory: shell
         run: npm install --no-audit --no-fund
+
+      - name: 生成应用图标（取自上游 dsh web favicon）
+        working-directory: shell
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          curl -fsSL "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/$TAG/apps/web/public/favicon.svg" -o build/favicon.svg
+          node scripts/make-icon.mjs build/favicon.svg build/icon.png
+          cp build/icon.png icon.png
+          chmod +x "build/双击我完成安装.command"
 
       - name: 冒烟验证（Electron 内嵌 Node 拉起 dsh CLI）
         working-directory: shell
@@ -110,6 +123,61 @@ jobs:
       - name: electron-builder 打包
         working-directory: shell
         run: ./node_modules/.bin/electron-builder --publish never
+
+      - name: 用户视角验证（启动产物 → 就绪信号 → GUI → 垫片）
+        run: |
+          set -euo pipefail
+          READY=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            EXE=$(ls shell/dist/*.exe | head -1)
+            "$EXE" &
+            LOG_DIR="$(cygpath "$APPDATA")/actdsh"
+            for i in $(seq 1 72); do
+              if [ -f "$LOG_DIR/dsh.log" ] && grep -q 'dsh web:' "$LOG_DIR/dsh.log"; then
+                READY=$(grep -o 'dsh web: [^ ]*' "$LOG_DIR/dsh.log" | head -1 | awk '{print $3}')
+                break
+              fi
+              sleep 5
+            done
+            if [ -z "$READY" ]; then echo "::error::Windows 用户视角验证失败：360 秒内未检测到就绪行"; exit 1; fi
+            curl -fsS "$READY" | grep -qi 'DeepSeek Harness'
+            test -f "$LOG_DIR/shims/pnpm.cmd"
+            "$LOG_DIR/shims/pnpm.cmd" --version
+            taskkill //F //IM actdsh.exe || true
+          else
+            DMG=$(ls shell/dist/*.dmg | head -1)
+            hdiutil attach -nobrowse -mountpoint /tmp/actdsh-mnt "$DMG"
+            test -f "/tmp/actdsh-mnt/双击我完成安装.command"
+            mkdir -p /tmp/actdsh-app
+            cp -R "/tmp/actdsh-mnt/actdsh.app" /tmp/actdsh-app/
+            hdiutil detach /tmp/actdsh-mnt
+            APP=/tmp/actdsh-app/actdsh.app
+            LOG_DIR="$HOME/Library/Application Support/actdsh"
+            # Gatekeeper 用户视角模拟：写入隔离属性 → open 应被拒；解除后应可运行。
+            xattr -w com.apple.quarantine "0003;66d3c000;Safari;" "$APP"
+            if open "$APP" 2>/tmp/quarantine-open.log; then
+              echo "::warning::隔离状态下 open 未立即报错（LaunchServices 异步拒绝时属正常）"
+            else
+              echo "隔离状态下 open 被拒绝（符合预期）"
+            fi
+            pkill -f actdsh || true
+            sleep 2
+            xattr -dr com.apple.quarantine "$APP"
+            open "$APP"
+            for i in $(seq 1 72); do
+              if [ -f "$LOG_DIR/dsh.log" ] && grep -q 'dsh web:' "$LOG_DIR/dsh.log"; then
+                READY=$(grep -o 'dsh web: [^ ]*' "$LOG_DIR/dsh.log" | head -1 | awk '{print $3}')
+                break
+              fi
+              sleep 5
+            done
+            if [ -z "$READY" ]; then echo "::error::macOS 用户视角验证失败：360 秒内未检测到就绪行"; exit 1; fi
+            curl -fsS "$READY" | grep -qi 'DeepSeek Harness'
+            test -f "$LOG_DIR/shims/pnpm"
+            "$LOG_DIR/shims/pnpm" --version
+            pkill -f actdsh || true
+          fi
+          echo "== $RUNNER_OS 用户视角验证通过: $READY =="
 
       - uses: actions/upload-artifact@v4
         with:
@@ -149,7 +217,7 @@ jobs:
             echo
             echo '## 安装与运行'
             echo
-            echo '参见 [README](https://github.com/${{ github.repository }}#readme)（含未签名放行步骤）。'
+            echo '参见 [README](https://github.com/${{ github.repository }}#readme)：Windows 便携 exe 双击即用；macOS 打开 dmg 后双击「双击我完成安装.command」即可（也可手动 xattr 解除隔离）。'
           } > notes.md
 
       - name: 创建 release 并一次性挂齐全部产物

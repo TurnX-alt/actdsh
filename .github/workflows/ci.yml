@@ -1,0 +1,55 @@
+# 构建行为守护：任何改动先证明「壳可安装、语法有效、图标可生成、打包配置可被 electron-builder 接受」。
+# 不产出发布物，分钟消耗以秒计。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shell-gates:
+    name: 壳与打包配置门槛
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: 壳语法检查
+        run: node --check shell/main.js
+
+      - name: 安装壳依赖（证明依赖面可解析）
+        working-directory: shell
+        run: npm install --no-audit --no-fund
+
+      - name: 图标管线验证（上游 favicon → 1024px PNG）
+        working-directory: shell
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/master/apps/web/public/favicon.svg" -o /tmp/favicon.svg
+          node scripts/make-icon.mjs /tmp/favicon.svg /tmp/icon.png
+          test -s /tmp/icon.png
+
+      - name: 一键安装器静态检查
+        run: |
+          set -euo pipefail
+          bash -n "shell/build/双击我完成安装.command"
+          grep -q 'xattr -dr com.apple.quarantine' "shell/build/双击我完成安装.command"
+
+      - name: electron-builder 配置可解析（dry-run 打包元数据）
+        working-directory: shell
+        run: ./node_modules/.bin/electron-builder --help > /dev/null

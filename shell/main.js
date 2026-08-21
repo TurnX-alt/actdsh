@@ -2,7 +2,7 @@
 // 职责仅限：以内嵌 Node 拉起上游 dsh web，等待官方就绪信号后在窗口中加载 GUI。
 // 面向零环境用户：自带 Node（ELECTRON_RUN_AS_NODE）与 pnpm 垫片，端口自动回退，
 // 不向上游传递任何未证实的参数，不添加任何新功能。
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, nativeImage } = require('electron');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -148,6 +148,11 @@ function loadingFile() {
 }
 
 app.whenReady().then(async () => {
+  // 应用图标与上游 dsh web 的 favicon 同源（构建期由 scripts/make-icon.mjs 生成 icon.png）。
+  const iconPath = path.join(__dirname, 'icon.png');
+  if (process.platform === 'darwin' && app.dock && fs.existsSync(iconPath)) {
+    try { app.dock.setIcon(nativeImage.createFromPath(iconPath)); } catch { /* 图标缺失不阻塞启动 */ }
+  }
   const logPath = openLog();
   try {
     const port = await pickPort();
@@ -156,6 +161,7 @@ app.whenReady().then(async () => {
       height: 900,
       title: 'actdsh',
       autoHideMenuBar: true,
+      icon: fs.existsSync(iconPath) ? iconPath : undefined,
     });
     await mainWindow.loadFile(loadingFile());
     startDsh(port, logPath);

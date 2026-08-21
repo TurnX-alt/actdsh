@@ -2,5 +2,8 @@ node_modules/
 dist/
 shell/runtime/node_modules/
 docs.local/
+shell/icon.png
+shell/build/icon.png
+shell/build/favicon.svg
 *.log
 .DS_Store
