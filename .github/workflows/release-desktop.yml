@@ -153,17 +153,22 @@ jobs:
             hdiutil detach /tmp/actdsh-mnt
             APP=/tmp/actdsh-app/actdsh.app
             LOG_DIR="$HOME/Library/Application Support/actdsh"
-            # Gatekeeper 用户视角模拟：写入隔离属性 → open 应被拒；解除后应可运行。
+            # Gatekeeper 用户视角模拟：写入隔离属性 → open 应被拒/挂起；解除后应可运行。
+            # open(1) 在无头 runner 上可能无限挂起（实测导致 45 分钟超时），必须带看门狗。
             xattr -w com.apple.quarantine "0003;66d3c000;Safari;" "$APP"
-            if open "$APP" 2>/tmp/quarantine-open.log; then
-              echo "::warning::隔离状态下 open 未立即报错（LaunchServices 异步拒绝时属正常）"
+            open "$APP" & OPEN_PID=$!
+            sleep 15
+            if kill -0 "$OPEN_PID" 2>/dev/null; then
+              kill "$OPEN_PID" 2>/dev/null || true
+              echo "隔离状态下 open 挂起/被拒（符合预期：Gatekeeper 拦截需用户交互）"
             else
-              echo "隔离状态下 open 被拒绝（符合预期）"
+              echo "open 已返回（隔离拒绝为异步时属正常）"
             fi
-            pkill -f actdsh || true
+            pkill -f 'actdsh.app' || true
             sleep 2
             xattr -dr com.apple.quarantine "$APP"
-            open "$APP"
+            # 直接执行主程序二进制（等价双击启动；绕开 open 在无头 runner 上挂起的路径）
+            "$APP/Contents/MacOS/actdsh" &
             for i in $(seq 1 72); do
               if [ -f "$LOG_DIR/dsh.log" ] && grep -q 'dsh web:' "$LOG_DIR/dsh.log"; then
                 READY=$(grep -o 'dsh web: [^ ]*' "$LOG_DIR/dsh.log" | head -1 | awk '{print $3}')
@@ -175,7 +180,7 @@ jobs:
             curl -fsS "$READY" | grep -qi 'DeepSeek Harness'
             test -f "$LOG_DIR/shims/pnpm"
             "$LOG_DIR/shims/pnpm" --version
-            pkill -f actdsh || true
+            pkill -f 'actdsh.app' || true
           fi
           echo "== $RUNNER_OS 用户视角验证通过: $READY =="
 
