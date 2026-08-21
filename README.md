@@ -1,81 +1,90 @@
-# actdsh
+# actdsh — DeepSeek Harness 桌面版（Windows / macOS）
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（dsh）的**桌面版自动打包仓库**。本仓库通过 GitHub Actions 每日自动巡检上游 Releases，一旦上游发布新的 `dsh-v*` 版本，即自动打包 **Windows（x64）** 与 **macOS（Apple Silicon）** 桌面版，并在本仓库 Releases 以**同名 tag** 同步发布。
+actdsh 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 dsh）的桌面分发仓库。dsh 官方只提供命令行安装方式（需要自备 Node.js 环境），actdsh 则把官方发布版本原样打包成桌面应用：下载、双击、直接使用，不需要安装 Node.js、npm 或任何其他开发环境。应用窗口内就是完整的 dsh 官方 Web 界面，配置、会话、技能、插件数据与官方版完全通用。本仓库的自动化流程每天检查一次上游新版本，Windows 与 macOS 安装包始终与上游同版本、同步发布。
 
-> 本项目为第三方打包分发，非 deepseek-ai 官方产品。dsh 本体版权归 deepseek-ai 所有，遵循其 [MIT 许可证](https://github.com/deepseek-ai/deepseek-harness/blob/master/LICENSE)。
+- 上游官方仓库：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
+- 本项目性质：第三方打包分发，非 deepseek-ai 官方产品（见文末声明）
 
-## 下载
+## 下载与安装
 
-前往 [Releases](../../releases) 页面，下载与你系统对应的最新产物：
+到 [Releases 页面](../../releases) 下载对应系统的最新安装包：
 
-| 系统 | 文件 | 形态 |
-|------|------|------|
-| Windows 10/11（x64） | `actdsh-win-x64-<版本>.exe` | 便携版，双击即运行，不写注册表 |
-| macOS（Apple Silicon） | `actdsh-mac-arm64-<版本>.dmg` | 拖入"应用程序"即完成安装 |
+| 系统 | 文件 | 使用方式 |
+| --- | --- | --- |
+| Windows 10/11（x64） | `actdsh-win-x64-<版本>.exe` | 便携版，双击直接运行 |
+| macOS（Apple 芯片） | `actdsh-mac-arm64-<版本>.dmg` | 打开 dmg，双击「双击我完成安装.command」 |
 
-## 首次运行（重要：未签名说明）
+### Windows：双击运行即可
 
-本项目的桌面包**未做代码签名**（见下方"常见问题"），首次运行需放行：
+首次运行时，Windows SmartScreen 可能提示「Windows 已保护你的电脑」。这是因为安装包未购买商业代码签名证书（见常见问题）。确认你下载自本仓库 Releases 页面后，点「更多信息」→「仍要运行」即可。之后再次启动不再提示。
 
-- **Windows**：双击 exe 后若出现"Windows 已保护你的电脑"（SmartScreen），点击 **"更多信息" → "仍要运行"**。
-- **macOS**：首次打开若提示"无法验证开发者"，请 **右键（或按住 Control 点按）应用图标 → 打开**，在弹窗中再点 **"打开"**。此后可正常双击启动。
+### macOS：多一步安全确认
 
-## 使用说明
+macOS 对从互联网下载、未经过 Apple 公证的应用会阻止打开（可能提示「应用程序已损坏」或「无法验证开发者」）。这是苹果 Gatekeeper 机制的标准行为，不代表安装包有问题。
 
-1. 启动应用后，窗口会显示"正在启动 dsh 服务…"，数秒后自动进入 DSH 图形界面（与 `dsh web` 完全相同）。
-2. 窗口关闭即停止后台 dsh 服务并退出。
-3. 桌面版包含 dsh 的**全部原生功能**；如需命令行，可进入应用安装目录，在 `resources/dsh/` 中找到完整 `dsh` CLI 使用。
-4. 插件管理与官方一致（`dsh plugin`）：包内已内置 pnpm 并自动注入，**无需自行安装** Node.js / npm / pnpm。
-5. 你的配置、会话记录、技能与插件全部保存在官方默认目录 `~/.dsh`（Windows：`C:\Users\<你>\.dsh`；macOS：`~/.dsh`），与官方版完全通用。
+最简单的处理方式：打开 dmg 后，双击窗口里的「双击我完成安装.command」。它会自动把 actdsh 装入应用程序目录、解除安全隔离标记并启动，全程不需要打开终端。
 
-## 零环境依赖
+如果你更习惯手动处理，也可以在终端执行：
 
-桌面版面向"官方方案启动失败/没有开发环境"的用户：**不需要**预先安装 Node.js、npm、pnpm 或特定浏览器——
+```bash
+xattr -dr com.apple.quarantine /Applications/actdsh.app
+```
 
-- 应用内嵌 Node 运行时（复用 Electron 内嵌 Node）与 Chromium 窗口；
-- 端口自动回退：默认 3080 被占用时自动尝试 3081–3099，仍被占则自动分配空闲端口，与官方版可并存运行；
-- 插件安装所需的 pnpm 已随包内置。
-
-## 更新机制
-
-- 上游每发布一个新版本，本仓库**至多约 1 天内**会自动发布同名版本（例如上游 `dsh-v0.1.0-rc.7` → 本仓库 `dsh-v0.1.0-rc.7`）。
-- 应用内暂无自动更新；请前往 Releases 下载新版覆盖即可。
-- 版本号与上游严格一一对应，Windows 与 macOS 产物永远同步发布。
-
-## 工作原理（面向开发者）
-
-每日 cron（23 3 * * *）
-→ poll job（ubuntu，约 10 秒，不 checkout，仅 2 次 API 调用）
-   比对「上游最新 dsh-v* tag」与「本仓库已发布 tag」；无变化立即退出
-→ build 矩阵（windows-latest + macos-latest 并行，仅新版本触发）
-   npm 安装上游 @deepseek-ai/dsh@<版本> → 冒烟验证 → electron-builder 打包
-→ release job（两个平台全部成功才执行）
-   以同名 tag 创建单个 release，一次挂齐双平台产物（prerelease 标志镜像上游）
-
-- 零外部服务、零外部状态：仅以 GitHub Actions + GitHub Releases 完成全部订阅与分发。
-- 公共仓库标准 runner 免费；轮询 job 空转仅约 10 秒。
+解除一次即可，之后正常从启动台打开。
 
 ## 常见问题
 
-**为什么不签名？**
-代码签名需要付费证书与 Apple Developer 账号。本项目为零成本自动分发，首版不签名；放行步骤见上文。后续可能引入签名。
+### 使用 actdsh 需要安装 Node.js 或其他环境吗？
 
-**杀毒软件/系统提示风险？**
-产物由 GitHub Actions 从公开源码与 npm 官方包自动构建，构建日志全程公开可查（Actions 页面）。如有顾虑可自行审查 workflow：`.github/workflows/release-desktop.yml`。
+不需要。应用内嵌了运行 dsh 所需的全部组件（Node 运行时、Chromium 窗口、插件管理用的 pnpm），装好即用。
 
-**端口冲突？**
-无需处理：应用会自动回退到空闲端口（3081–3099 或系统分配），与已运行的官方版实例互不干扰。
+### 插件怎么安装？
 
-**首次启动很慢？**
-属正常现象：便携版需自解压约 100MB 且 dsh 首次运行要初始化 profile（实测约 2-4 分钟，安全软件扫描会进一步拖慢）。窗口会持续显示启动页，请勿反复双击（应用有单实例保护）。第二次起明显更快。
+与官方方式完全一致：dsh 的插件管理基于 pnpm，actdsh 已把 pnpm 内置进安装包并自动接好，插件的安装、更新、卸载都不需要额外准备环境。
 
-**启动失败怎么办？**
-应用会弹窗提示，并将 dsh 日志写入用户数据目录（Windows：`%APPDATA%\actdsh\dsh.log`；macOS：`~/Library/Application Support/actdsh/dsh.log`），反馈问题时请附上该文件。
+### 配置、会话、技能数据存在哪里？
 
-**支持 Linux / Intel Mac / Windows arm64 吗？**
-暂不支持，后续视需求扩展。
+与官方版完全相同，存放在系统用户目录下的 `.dsh` 目录（Windows：`C:\Users\<用户名>\.dsh`；macOS：`~/.dsh`）。如果你之前用过官方命令行版，actdsh 会直接沿用这些数据。
 
-## 许可
+### 端口被其他程序占用会怎样？
+
+dsh 默认使用 3080 端口。actdsh 启动时会自动检测：3080 被占用就依次尝试 3081–3099，都被占则由系统分配空闲端口。即使本机已有另一个 dsh 实例在运行，也不影响 actdsh 正常启动。
+
+### 第一次启动为什么比较慢？
+
+首次运行需要解压内置组件并初始化 dsh 配置目录，实测约 2–4 分钟（杀毒软件实时扫描会更慢）。窗口会显示启动页，完成后自动进入 dsh 界面。第二次起明显更快。
+
+### 如何更新到新版本？
+
+actdsh 的版本号与上游完全一致（例如上游发布 `dsh-v0.1.0-rc.8`，本仓库即发布同名版本）。上游发布新版本后，本仓库通常 1 天内自动跟进。到 Releases 页面下载新版覆盖即可，数据不受影响。应用内暂无自动更新。
+
+### 为什么安装包没有做代码签名？
+
+正规的代码签名需要付费证书（Apple 开发者账号 $99/年及 Windows 代码签名证书）。本项目是零成本的自动化分发，首要不签名、用上文说明的方式放行；构建过程全部在 GitHub Actions 公开日志中可查，workflow 文件开源可审。后续可能引入正式签名。
+
+## 工作原理（面向开发者）
+
+```
+每日 03:23 UTC 定时轮询
+  → 对比「上游最新 dsh-v* 标签」与「本仓库已发布标签」（几秒即退，不消耗构建资源）
+  → 发现新版本才启动构建：Windows 与 macOS 两台 runner 并行
+  → 从 npm 安装官方 @deepseek-ai/dsh 对应版本，组装 Electron 壳
+  → 用户视角自动化验证：真实启动安装包 → 等待 dsh 就绪 → 访问 Web 界面 → 校验插件链路
+  → 双平台全部通过才创建 Release，两份安装包挂同一个标签
+```
+
+每次发布前，两个平台的安装包都会在干净的 runner 上被真实启动并通过上述验证——这正是你下载后可以直接使用的底气。验证不过，版本不会发布。
+
+图标与 dsh Web 界面同源（取自上游 favicon）。整个流程只使用 GitHub Actions 与 GitHub Releases，不依赖任何外部服务。
+
+## English Summary
+
+actdsh distributes ready-to-use desktop builds of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) for Windows (x64, portable exe) and macOS (Apple Silicon, dmg). No Node.js, npm, or any other toolchain is required: the app bundles the runtime, the official web UI, and pnpm for plugin management, and stores data in the same `~/.dsh` directory as the official CLI. A GitHub Actions workflow checks upstream for a new `dsh-v*` tag once a day, builds both platforms in parallel, smoke-tests each package by actually launching it, and publishes both assets under the same tag. Third-party packaging, not an official deepseek-ai product.
+
+## 许可与声明
 
 - 本仓库的打包脚本与壳代码：MIT。
 - dsh 本体：© deepseek-ai，[MIT](https://github.com/deepseek-ai/deepseek-harness/blob/master/LICENSE)。
+- actdsh 与 deepseek-ai 无隶属关系，仅为社区分发；dsh 的功能问题请反馈至[上游仓库](https://github.com/deepseek-ai/deepseek-harness/issues)。
+
+最近更新：2026-08-21
