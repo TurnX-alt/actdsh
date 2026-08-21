@@ -130,29 +130,27 @@ jobs:
           READY=""
           if [ "$RUNNER_OS" = "Windows" ]; then
             EXE=$(ls shell/dist/*.exe | head -1)
-            # 与用户同款安装器：NSIS 静默安装到 %LocalAppData%\Programs，再从安装位置启动。
-            "$EXE" /S
-            INSTALLED="$(cygpath "$LOCALAPPDATA")/Programs/actdsh/actdsh.exe"
-            for i in $(seq 1 120); do [ -f "$INSTALLED" ] && break; sleep 5; done
-            if [ ! -f "$INSTALLED" ]; then
-              echo "::error::NSIS 安装 600 秒内未完成"
-              ls -la "$(cygpath "$LOCALAPPDATA")/Programs" || true
-              exit 1
-            fi
-            "$INSTALLED" &
+            # 与用户双击完全一致：安装器显示进度 → 安装 → 自动启动（runAfterFinish）。
+            # 静默 /S 模式在该路径上实测会挂起，故按真实交互路径验证并计时。
+            START_TS=$SECONDS
+            "$EXE" &
             LOG_DIR="$(cygpath "$APPDATA")/actdsh"
-            for i in $(seq 1 72); do
+            for i in $(seq 1 120); do
               if [ -f "$LOG_DIR/dsh.log" ] && grep -q 'dsh web:' "$LOG_DIR/dsh.log"; then
                 READY=$(grep -o 'dsh web: [^ ]*' "$LOG_DIR/dsh.log" | head -1 | awk '{print $3}')
                 break
               fi
               sleep 5
             done
-            if [ -z "$READY" ]; then echo "::error::Windows 用户视角验证失败：360 秒内未检测到就绪行"; exit 1; fi
+            if [ -z "$READY" ]; then echo "::error::Windows 用户视角验证失败：600 秒内未检测到就绪行"; ls -la "$LOG_DIR" || true; exit 1; fi
+            echo "安装+启动总耗时: $((SECONDS-START_TS)) 秒"
             curl -fsS "$READY" | grep -qi 'DeepSeek Harness'
             test -f "$LOG_DIR/shims/pnpm.cmd"
             "$LOG_DIR/shims/pnpm.cmd" --version
             taskkill //F //IM actdsh.exe || true
+            # 清理安装痕迹，避免影响后续运行。
+            UNINST="$(cygpath "$LOCALAPPDATA")/Programs/actdsh/Uninstall actdsh.exe"
+            [ -f "$UNINST" ] && "$UNINST" /S || true
           else
             DMG=$(ls shell/dist/*.dmg | head -1)
             hdiutil attach -nobrowse -mountpoint /tmp/actdsh-mnt "$DMG"
