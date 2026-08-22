@@ -1,6 +1,7 @@
 node_modules/
 dist/
 shell/runtime/node_modules/
+shell/runtime/node/
 docs.local/
 shell/icon.png
 shell/build/icon.png
