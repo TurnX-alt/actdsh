@@ -94,6 +94,24 @@ jobs:
         working-directory: shell/runtime
         run: npm install --no-audit --no-fund pnpm
 
+      # dsh 的原生模块与目录对话框 worker 均以官方 Node 为基准（Electron-as-node 已实测踩坑），
+      # 故内嵌 nodejs.org 官方运行时，行为与官方 CLI 完全对齐。
+      - name: 内嵌官方 Node 运行时
+        run: |
+          set -euo pipefail
+          NODE_VER=24.18.0
+          mkdir -p shell/runtime/node
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-win-x64.zip" -o /tmp/node-dist.zip
+            unzip -q /tmp/node-dist.zip -d /tmp/node-dist
+            cp -R "/tmp/node-dist/node-v${NODE_VER}-win-x64/." shell/runtime/node/
+            ./shell/runtime/node/node.exe --version
+          else
+            curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-darwin-arm64.tar.gz" -o /tmp/node-dist.tar.gz
+            tar -xzf /tmp/node-dist.tar.gz -C shell/runtime/node --strip-components 1
+            ./shell/runtime/node/bin/node --version
+          fi
+
       - name: 壳版本号对齐上游
         working-directory: shell
         run: npm pkg set "version=$DSH_VERSION"
@@ -129,9 +147,12 @@ jobs:
           set -euo pipefail
           READY=""
           if [ "$RUNNER_OS" = "Windows" ]; then
-            EXE=$(ls shell/dist/*.exe | head -1)
-            # 与用户双击完全一致：安装器显示进度 → 安装 → 自动启动（runAfterFinish）。
-            # 静默 /S 模式在该路径上实测会挂起，故按真实交互路径验证并计时。
+            # zip 便携的用户路径：解压 → 双击 actdsh.exe。
+            ZIP=$(ls shell/dist/*.zip | head -1)
+            rm -rf /tmp/actdsh-zip && mkdir -p /tmp/actdsh-zip
+            unzip -q "$ZIP" -d /tmp/actdsh-zip
+            EXE=$(find /tmp/actdsh-zip -name actdsh.exe | head -1)
+            [ -n "$EXE" ] || { echo "::error::zip 内未找到 actdsh.exe"; exit 1; }
             START_TS=$SECONDS
             "$EXE" &
             LOG_DIR="$(cygpath "$APPDATA")/actdsh"
@@ -148,9 +169,6 @@ jobs:
             test -f "$LOG_DIR/shims/pnpm.cmd"
             "$LOG_DIR/shims/pnpm.cmd" --version
             taskkill //F //IM actdsh.exe || true
-            # 清理安装痕迹，避免影响后续运行。
-            UNINST="$(cygpath "$LOCALAPPDATA")/Programs/actdsh/Uninstall actdsh.exe"
-            [ -f "$UNINST" ] && "$UNINST" /S || true
           else
             DMG=$(ls shell/dist/*.dmg | head -1)
             hdiutil attach -nobrowse -mountpoint /tmp/actdsh-mnt "$DMG"
@@ -195,7 +213,7 @@ jobs:
         with:
           name: pkg-${{ matrix.name }}
           path: |
-            shell/dist/*.exe
+            shell/dist/*.zip
             shell/dist/*.dmg
           if-no-files-found: error
           retention-days: 1

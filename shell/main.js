@@ -45,20 +45,30 @@ function resolvePnpmCjs() {
   return path.join(resourcesBase(), 'node_modules', 'pnpm', 'bin', 'pnpm.cjs');
 }
 
+// 内嵌官方 Node 运行时（构建期从 nodejs.org 下载对应平台发行版）。
+// dsh 的原生模块（koffi 等）与目录对话框 worker 都以官方 Node 为基准；用它替代
+// ELECTRON_RUN_AS_NODE，行为与官方 CLI 完全对齐（此前目录选择器故障即源于此）。
+function resolveNodeBin() {
+  return process.platform === 'win32'
+    ? path.join(resourcesBase(), 'node', 'node.exe')
+    : path.join(resourcesBase(), 'node', 'bin', 'node');
+}
+
 // dsh 的插件管理（dsh plugin）是 pnpm 的前转器，会 spawnSync('pnpm')。
 // 为零环境用户内置 pnpm：在 userData/shims 生成垫片脚本，仅对子进程 PATH 前置注入。
 function ensurePnpmShims() {
   const shimDir = path.join(app.getPath('userData'), 'shims');
   fs.mkdirSync(shimDir, { recursive: true });
   const pnpmCjs = resolvePnpmCjs();
+  const nodeBin = resolveNodeBin();
   if (process.platform === 'win32') {
     // spawnSync(..., { shell: true }) 经 cmd 解析，.cmd 垫片可被命中。
     fs.writeFileSync(path.join(shimDir, 'pnpm.cmd'),
-      '@echo off\r\nset ELECTRON_RUN_AS_NODE=1\r\n"' + process.execPath + '" "' + pnpmCjs + '" %*\r\n');
+      '@echo off\r\n"' + nodeBin + '" "' + pnpmCjs + '" %*\r\n');
   } else {
     const shim = path.join(shimDir, 'pnpm');
     fs.writeFileSync(shim,
-      '#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "' + process.execPath + '" "' + pnpmCjs + '" "$@"\n');
+      '#!/bin/sh\nexec "' + nodeBin + '" "' + pnpmCjs + '" "$@"\n');
     fs.chmodSync(shim, 0o755);
   }
   return shimDir;
@@ -87,23 +97,33 @@ function openLog() {
   return logPath;
 }
 
+// --no-open 于 rc.8 之后才进入上游发布：旧版本传入会以 "unknown option" 退出。
+// 策略：默认传参抑制自动唤起浏览器；识别到不支持时回退不带参重启并记住。
+let suppressNoOpen = false;
+const stdoutListeners = [];
+
 function startDsh(port, logPath) {
   const shimDir = ensurePnpmShims();
   const env = {
     ...process.env,
-    ELECTRON_RUN_AS_NODE: '1',
     PATH: shimDir + path.delimiter + (process.env.PATH ?? process.env.Path ?? ''),
   };
-  dshChild = spawn(process.execPath, [resolveDshBin(), 'web', '--port', String(port)], {
+  const args = [resolveDshBin(), 'web', '--port', String(port)];
+  const usedNoOpen = !suppressNoOpen;
+  if (usedNoOpen) args.push('--no-open');
+  dshChild = spawn(resolveNodeBin(), args, {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
     // POSIX 下让子进程成为进程组组长，退出时可整组回收（dsh 会再派生沙箱/worker 子进程）。
     detached: process.platform !== 'win32',
   });
+  let earlyBuffer = '';
   const onChunk = (chunk) => {
     const text = chunk.toString();
     logStream.write(text);
     process.stdout.write(text);
+    if (usedNoOpen) earlyBuffer += text;
+    for (const fn of stdoutListeners) fn(text);
   };
   dshChild.stdout.on('data', onChunk);
   dshChild.stderr.on('data', onChunk);
@@ -114,11 +134,16 @@ function startDsh(port, logPath) {
     }
   });
   dshChild.on('exit', (code) => {
-    if (!app.isQuitting) {
-      dialog.showErrorBox('dsh 服务已退出',
-        '后台 dsh 进程异常退出（退出码 ' + code + '）。\n日志：' + logPath);
-      app.quit();
+    if (app.isQuitting) return;
+    if (usedNoOpen && earlyBuffer.includes('unknown option')) {
+      suppressNoOpen = true;
+      logStream.write('actdsh: 该 dsh 版本不支持 --no-open，已回退为不带该参数重启。\n');
+      startDsh(port, logPath);
+      return;
     }
+    dialog.showErrorBox('dsh 服务已退出',
+      '后台 dsh 进程异常退出（退出码 ' + code + '）。\n日志：' + logPath);
+    app.quit();
   });
 }
 
@@ -143,18 +168,15 @@ function waitReadyUrl() {
     const timer = setTimeout(() => {
       reject(new Error('等待 dsh 服务就绪超时。\n日志：' + path.join(app.getPath('userData'), 'dsh.log')));
     }, READY_TIMEOUT_MS);
-    dshChild.stdout.on('data', (chunk) => {
-      buffer += chunk.toString();
+    stdoutListeners.push((text) => {
+      buffer += text;
       const match = URL_PATTERN.exec(buffer);
       if (match) {
         clearTimeout(timer);
         resolve(match[1]);
       }
     });
-    dshChild.once('exit', () => {
-      clearTimeout(timer);
-      reject(new Error('dsh 服务在就绪前退出。\n日志：' + path.join(app.getPath('userData'), 'dsh.log')));
-    });
+    // 退出路径由 startDsh 的 exit 处理（含 --no-open 回退重启）；失败由上方超时兜底。
   });
 }
 

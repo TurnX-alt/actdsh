@@ -11,16 +11,16 @@ actdsh 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)�
 
 | 系统 | 文件 | 使用方式 |
 | --- | --- | --- |
-| Windows 10/11（x64） | `actdsh-win-x64-<版本>.exe` | 安装器，双击自动安装并启动 |
+| Windows 10/11（x64） | `actdsh-win-x64-<版本>.zip` | 解压到任意位置，双击 actdsh.exe 即用 |
 | macOS（Apple 芯片） | `actdsh-mac-arm64-<版本>.dmg` | 打开 dmg，双击「双击我完成安装.command」 |
 
-### Windows：双击安装即可
+### Windows：解压即用，位置你说了算
 
-双击 exe 后，安装器会显示安装进度并自动完成安装、启动应用，同时在开始菜单和桌面创建快捷方式。以后从快捷方式启动，几秒钟即可打开，无需再次安装。
+把 zip 解压到你喜欢的任意位置（桌面、D 盘、U 盘都可以），双击其中的 actdsh.exe 即可使用。没有安装器、不写注册表、不碰系统里已有的任何程序——应用需要的所有组件都在这个文件夹里。
 
-首次运行时，Windows SmartScreen 可能提示「Windows 已保护你的电脑」。这是因为安装包未购买商业代码签名证书（见常见问题）。确认你下载自本仓库 Releases 页面后，点「更多信息」→「仍要运行」即可。之后再次启动不再提示。
+首次运行时，Windows SmartScreen 可能提示「Windows 已保护你的电脑」。这是因为程序未购买商业代码签名证书（见常见问题）。确认你下载自本仓库 Releases 页面后，点「更多信息」→「仍要运行」即可。
 
-如需卸载：在 Windows「设置 → 应用」中找到 actdsh 卸载即可；你的 dsh 数据（`.dsh` 目录）不会被删除。
+你的 dsh 数据（配置、会话、技能、插件）存放在用户目录的 `.dsh` 文件夹，与官方版通用，搬家或删除程序文件夹都不会动它。卸载 = 删除解压出来的文件夹，仅此而已。
 
 ### macOS：多一步安全确认
 
@@ -83,7 +83,7 @@ actdsh 的版本号与上游完全一致（例如上游发布 `dsh-v0.1.0-rc.8`�
 
 ## English Summary
 
-actdsh distributes ready-to-use desktop builds of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) for Windows (x64, portable exe) and macOS (Apple Silicon, dmg). No Node.js, npm, or any other toolchain is required: the app bundles the runtime, the official web UI, and pnpm for plugin management, and stores data in the same `~/.dsh` directory as the official CLI. A GitHub Actions workflow checks upstream for a new `dsh-v*` tag once a day, builds both platforms in parallel, smoke-tests each package by actually launching it, and publishes both assets under the same tag. Third-party packaging, not an official deepseek-ai product.
+actdsh distributes ready-to-use desktop builds of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) for Windows (x64, portable zip) and macOS (Apple Silicon, dmg). No Node.js, npm, or any other toolchain is required: the app bundles the runtime, the official web UI, and pnpm for plugin management, and stores data in the same `~/.dsh` directory as the official CLI. A GitHub Actions workflow checks upstream for a new `dsh-v*` tag once a day, builds both platforms in parallel, smoke-tests each package by actually launching it, and publishes both assets under the same tag. Third-party packaging, not an official deepseek-ai product.
 
 ## 许可与声明
 

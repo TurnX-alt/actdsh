@@ -39,13 +39,8 @@
     "npmRebuild": false,
     "win": {
       "target": [
-        "nsis"
+        "zip"
       ]
-    },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "runAfterFinish": true
     },
     "mac": {
       "target": [
