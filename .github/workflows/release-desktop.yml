@@ -215,12 +215,16 @@ jobs:
           fi
           echo "== $RUNNER_OS 用户视角验证通过: $READY =="
 
+      - name: 归档构建版本清单
+        run: cp shell/runtime/upstream-versions.json "shell/dist/upstream-versions-${{ matrix.name }}.json"
+
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.name }}
           path: |
             shell/dist/*.zip
             shell/dist/*.dmg
+            shell/dist/*.json
           if-no-files-found: error
           retention-days: 1
 
