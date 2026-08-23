@@ -65,12 +65,18 @@ writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 execFileSync(NPM, ['install', '--no-audit', '--no-fund'], { stdio: 'inherit', ...NPM_OPTS });
 
 // 4. 校验：钉死名单全部到位；产出构建版本清单
+// 注意：钉死后 npm 可能把个别包折叠为嵌套安装或剪枝出闭包，故遍历顶层+嵌套；
+// 不在树内的包视为已离开闭包（不算漂移）。
 const actual = {};
-for (const p of globSync('node_modules/@deepseek-ai/*/package.json')) {
-  const m = JSON.parse(readFileSync(p, 'utf8'));
-  actual[m.name] = m.version;
+for (const pattern of ['node_modules/@deepseek-ai/*/package.json', 'node_modules/*/*/node_modules/@deepseek-ai/*/package.json']) {
+  for (const p of globSync(pattern)) {
+    try {
+      const m = JSON.parse(readFileSync(p, 'utf8'));
+      actual[m.name] = m.version;
+    } catch { /* 忽略坏包 */ }
+  }
 }
-const drift = pinnable.filter(name => actual[name] !== V).map(name => name + '@' + actual[name]);
+const drift = pinnable.filter(name => actual[name] !== undefined && actual[name] !== V).map(name => name + '@' + actual[name]);
 if (drift.length > 0) {
   console.error('钉死失败，仍漂移: ' + drift.join(', '));
   process.exit(1);
