@@ -16,11 +16,20 @@ const NPM = 'npm';
 const NPM_OPTS = process.platform === 'win32' ? { shell: true } : {};
 const POOL = 12;
 
+// 元数据拉取带重试：瞬断误判为独立版本线会让钉死集随网络抖动漂移（实测三跑三不同）。
 async function packument(name) {
   const url = 'https://registry.npmjs.org/' + name.replace('/', '%2f');
-  const res = await fetch(url, { headers: { accept: 'application/vnd.npm.install-v1+json' }, signal: AbortSignal.timeout(15000) });
-  if (!res.ok) throw new Error('packument ' + res.status + ' for ' + name);
-  return res.json();
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const res = await fetch(url, { headers: { accept: 'application/vnd.npm.install-v1+json' }, signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error('packument ' + res.status + ' for ' + name);
+      return await res.json();
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error('packument failed for ' + name);
 }
 
 // 1. 从主包出发 BFS：仅沿「有 tag 版本线」的包扩展；独立版本线记入豁免
@@ -34,7 +43,10 @@ while (queue.length > 0) {
   }));
   for (let i = 0; i < chunk.length; i += 1) {
     const meta = metas[i];
-    if (meta === null || !meta.versions || !meta.versions[V]) {
+    if (meta === null) throw new Error('packument 三次重试仍失败: ' + chunk[i]);
+    if (!meta.versions || !meta.versions[V]) {
+      // 关键：先前作为依赖加入 pinnable 的包被判独立时必须移除，否则会被钉到不存在的版本（cordis ETARGET 实证）
+      pinnable.delete(chunk[i]);
       independent.add(chunk[i]);
       continue;
     }
