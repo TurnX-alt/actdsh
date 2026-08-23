@@ -69,7 +69,7 @@ jobs:
           - { name: windows-x64, os: windows-latest }
           - { name: macos-arm64, os: macos-latest }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -93,6 +93,12 @@ jobs:
       - name: 内置 pnpm
         working-directory: shell/runtime
         run: npm install --no-audit --no-fund pnpm
+
+      # 恢复上游「全部包同一版本线」不变量：sibling 依赖以 ^ 区间发布会漂到更新兼容版，
+      # 此处把同版本线的 @deepseek-ai/* 全部钉到 tag 精确版本（独立版本线 cordis 等自动豁免）。
+      - name: 版本线钉死（release 纯度）
+        working-directory: shell/runtime
+        run: node ../scripts/pin-upstream.mjs "$DSH_VERSION"
 
       # dsh 的原生模块与目录对话框 worker 均以官方 Node 为基准（Electron-as-node 已实测踩坑），
       # 故内嵌 nodejs.org 官方运行时，行为与官方 CLI 完全对齐。
@@ -247,7 +253,13 @@ jobs:
             echo
             echo '## 安装与运行'
             echo
-            echo '参见 [README](https://github.com/${{ github.repository }}#readme)：Windows 便携 exe 双击即用；macOS 打开 dmg 后双击「双击我完成安装.command」即可（也可手动 xattr 解除隔离）。'
+            echo '参见 [README](https://github.com/${{ github.repository }}#readme)：Windows zip 解压即用；macOS 打开 dmg 后双击「双击我完成安装.command」即可（也可手动 xattr 解除隔离）。'
+            echo
+            echo '## 构建版本清单'
+            echo
+            M=$(ls dist/upstream-versions-*.json | head -1)
+            echo "- dsh 家族包：$(jq '.pinnedCount' "$M") 个全部锁定上游 tag 精确版本"
+            echo "- 独立版本线（上游设计如此，不随 tag）：$(jq -r '.independent | to_entries | map("\(.key)@\(.value)") | join("、")' "$M")"
           } > notes.md
 
       - name: 创建 release 并一次性挂齐全部产物

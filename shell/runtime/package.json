@@ -4,7 +4,8 @@
   "private": true,
   "description": "构建期注入：GitHub Actions 在此目录 npm 安装上游 @deepseek-ai/dsh@<版本>",
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.0-rc.7",
+    "@deepseek-ai/dsh": "0.1.0-rc.8",
     "pnpm": "11.22.0"
-  }
+  },
+  "overrides": {}
 }
