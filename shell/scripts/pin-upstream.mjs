@@ -30,7 +30,7 @@ console.log('闭包内 @deepseek-ai/* 包数: ' + names.size);
 async function hasVersionLine(name) {
   const url = 'https://registry.npmjs.org/' + name.replace('/', '%2f');
   try {
-    const res = await fetch(url, { headers: { accept: 'application/vnd.npm.install-v1+json' } });
+    const res = await fetch(url, { headers: { accept: 'application/vnd.npm.install-v1+json' }, signal: AbortSignal.timeout(15000) });
     if (!res.ok) return false;
     const meta = await res.json();
     return Object.prototype.hasOwnProperty.call(meta.versions ?? {}, V);
