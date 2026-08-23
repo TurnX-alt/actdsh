@@ -56,7 +56,7 @@ for (const name of pinnable) manifest.overrides[name] = V;
 writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 
 // 3. 单次安装（解析器从起点即指向 tag 版本）
-execFileSync(NPM, ['install', '--no-audit', '--no-fund'], { stdio: 'inherit', ...NPM_OPTS });
+execFileSync(NPM, ['install', '--no-audit', '--no-fund', '--legacy-peer-deps'], { stdio: 'inherit', ...NPM_OPTS });
 
 // 4. 校验（顶层+嵌套；树内缺失视为离开闭包）；产出构建版本清单
 const actual = {};
