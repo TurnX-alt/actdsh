@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1360" height="960" viewBox="0 0 680 480">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F7FAFE"/>
+      <stop offset="1" stop-color="#E4EDF7"/>
+    </linearGradient>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#4A6B8A"/>
+    </marker>
+  </defs>
+  <rect width="680" height="480" fill="url(#bg)"/>
+  <text x="340" y="48" text-anchor="middle" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="22" font-weight="600" fill="#16324F">actdsh — DeepSeek Harness 桌面版</text>
+  <line x1="215" y1="152" x2="468" y2="152" stroke="#4A6B8A" stroke-width="2.5" stroke-dasharray="7 6" marker-end="url(#arr)"/>
+  <g font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="16" fill="#2B4A63">
+    <text x="70" y="282">①  把 actdsh 拖入右侧 Applications</text>
+    <text x="70" y="314">②  右键点按下方「双击我完成安装.command」→ 打开</text>
+    <text x="92" y="344" font-size="13.5" fill="#5B7B994">（首次打开会有系统安全提示，确认一次即可）</text>
+    <text x="70" y="376">③  安装完成后，从启动台打开 actdsh 即可</text>
+  </g>
+  <text x="340" y="458" text-anchor="middle" font-family="PingFang SC, Microsoft YaHei, sans-serif" font-size="11.5" fill="#7A8CA0">第三方打包分发，非 deepseek-ai 官方产品  ·  github.com/TurnX-alt/actdsh</text>
+</svg>

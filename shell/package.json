@@ -49,26 +49,34 @@
       "category": "public.app-category.developer-tools"
     },
     "dmg": {
+      "background": "build/background.png",
       "window": {
-        "width": 640,
-        "height": 440
+        "width": 680,
+        "height": 480
       },
+      "iconSize": 72,
       "contents": [
         {
           "x": 120,
-          "y": 170
+          "y": 145
         },
         {
-          "x": 520,
-          "y": 170,
+          "x": 560,
+          "y": 145,
           "type": "link",
           "path": "/Applications"
         },
         {
-          "x": 320,
-          "y": 330,
+          "x": 200,
+          "y": 420,
           "type": "file",
           "path": "build/双击我完成安装.command"
+        },
+        {
+          "x": 470,
+          "y": 420,
+          "type": "file",
+          "path": "build/请先读我.txt"
         }
       ]
     }

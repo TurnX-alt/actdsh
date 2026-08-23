@@ -134,6 +134,7 @@ jobs:
           curl -fsSL "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/$TAG/apps/web/public/favicon.svg" -o build/favicon.svg
           node scripts/make-icon.mjs build/favicon.svg build/icon.png
           cp build/icon.png icon.png
+          node scripts/make-dmg-background.mjs
           chmod +x "build/双击我完成安装.command"
 
       - name: 冒烟验证（Electron 内嵌 Node 拉起 dsh CLI）
@@ -179,6 +180,7 @@ jobs:
             DMG=$(ls shell/dist/*.dmg | head -1)
             hdiutil attach -nobrowse -mountpoint /tmp/actdsh-mnt "$DMG"
             test -f "/tmp/actdsh-mnt/双击我完成安装.command"
+            test -f "/tmp/actdsh-mnt/请先读我.txt"
             mkdir -p /tmp/actdsh-app
             cp -R "/tmp/actdsh-mnt/actdsh.app" /tmp/actdsh-app/
             hdiutil detach /tmp/actdsh-mnt
