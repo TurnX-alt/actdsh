@@ -145,6 +145,18 @@ jobs:
         working-directory: shell
         run: ./node_modules/.bin/electron-builder --publish never
 
+      # macOS 26.2+ 的 Finder 不渲染 dmgbuild 旧格式 .DS_Store 背景（线上实测回归），
+      # 此处用捆绑 dmgbuild 的 python 把 dmg 布局改写为兼容格式（.background/ + pBBk 书签 + 窗口外隐藏项坐标）。
+      - name: 修复 dmg Finder 布局（macOS 26.2+ 背景兼容）
+        if: runner.os == 'macOS'
+        working-directory: shell
+        run: |
+          set -euo pipefail
+          DMGPY=$(find "$HOME/Library/Caches/electron-builder" -path '*dmgbuild-bundle*' -name 'python3.14' 2>/dev/null | head -1)
+          if [ -z "$DMGPY" ]; then echo "::error::未找到 electron-builder 捆绑 python"; exit 1; fi
+          DMGSITE="$(dirname "$DMGPY")/../lib/python3.14/site-packages"
+          PYTHONPATH="$DMGSITE" "$DMGPY" scripts/fix-dmg-finder.py "$(ls dist/*.dmg | head -1)"
+
       - name: 用户视角验证（启动产物 → 就绪信号 → GUI → 垫片）
         run: |
           set -euo pipefail
@@ -177,6 +189,7 @@ jobs:
             hdiutil attach -nobrowse -mountpoint /tmp/actdsh-mnt "$DMG"
             test -f "/tmp/actdsh-mnt/双击我完成安装.command"
             test -f "/tmp/actdsh-mnt/请先读我.txt"
+            test -f "/tmp/actdsh-mnt/.background/background.png"
             mkdir -p /tmp/actdsh-app
             cp -R "/tmp/actdsh-mnt/actdsh.app" /tmp/actdsh-app/
             hdiutil detach /tmp/actdsh-mnt
