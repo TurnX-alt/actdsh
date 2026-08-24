@@ -189,7 +189,7 @@ jobs:
             hdiutil attach -nobrowse -mountpoint /tmp/actdsh-mnt "$DMG"
             test -f "/tmp/actdsh-mnt/双击我完成安装.command"
             test -f "/tmp/actdsh-mnt/请先读我.txt"
-            test -f "/tmp/actdsh-mnt/.background/background.png"
+            test -f "/tmp/actdsh-mnt/.background/background.png" || test -f "/tmp/actdsh-mnt/.background/background.tiff"
             mkdir -p /tmp/actdsh-app
             cp -R "/tmp/actdsh-mnt/actdsh.app" /tmp/actdsh-app/
             hdiutil detach /tmp/actdsh-mnt
