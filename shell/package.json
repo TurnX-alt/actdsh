@@ -51,30 +51,30 @@
     "dmg": {
       "background": "build/background.png",
       "window": {
-        "width": 680,
-        "height": 480
+        "width": 900,
+        "height": 680
       },
-      "iconSize": 72,
+      "iconSize": 96,
       "contents": [
         {
-          "x": 120,
-          "y": 145
+          "x": 200,
+          "y": 320
         },
         {
-          "x": 560,
-          "y": 145,
+          "x": 700,
+          "y": 320,
           "type": "link",
           "path": "/Applications"
         },
         {
-          "x": 200,
-          "y": 420,
+          "x": 560,
+          "y": 560,
           "type": "file",
           "path": "build/双击我完成安装.command"
         },
         {
-          "x": 470,
-          "y": 420,
+          "x": 700,
+          "y": 560,
           "type": "file",
           "path": "build/请先读我.txt"
         }
