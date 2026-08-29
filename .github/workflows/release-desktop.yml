@@ -1,6 +1,6 @@
 # actdsh 桌面版发布流水线。
 # 订阅 deepseek-ai/deepseek-harness 的 dsh-v* 新 tag，打包 Win/macOS 桌面版并同步发布到本仓库 Releases。
-# 设计约束：轮询秒级空转退出；构建仅在有新版本时触发；每个平台产物先过用户视角验证才允许发布。
+# 设计约束：轮询秒级空转退出；构建仅在有新版本时触发；上游 release 无对应 npm 包（alpha 线只发 GitHub）时跳过空转；每个平台产物先过用户视角验证才允许发布。
 name: 桌面版发布
 
 on:
@@ -33,26 +33,39 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
-      - name: 比对上游最新 dsh release 与本仓库已发布 tag
+      - name: 比对上游最新 dsh release、npm 可用性与本仓库已发布 tag
         id: check
         run: |
           set -euo pipefail
           forced='${{ inputs.tag }}'
           if [ -n "$forced" ]; then
             tag="$forced"
+            version="${tag#dsh-v}"
+            if ! npm view "@deepseek-ai/dsh@$version" version >/dev/null 2>&1; then
+              echo "::error::强制指定的 $tag 无对应 npm 包 @deepseek-ai/dsh@$version（上游该 release 未发布 npm），无法打包。"
+              exit 1
+            fi
           else
-            tag=$(gh api repos/deepseek-ai/deepseek-harness/releases --jq 'map(select((.draft | not) and (.tag_name | startswith("dsh-v")))) | .[0].tag_name // empty')
-          fi
-          if [ -z "$tag" ]; then
-            echo '上游暂无 dsh-v* release，本轮空转退出。'
-            exit 0
-          fi
-          if [ -z "$forced" ] && gh release view "$tag" --repo '${{ github.repository }}' >/dev/null 2>&1; then
-            echo "$tag 已发布过，本轮空转退出。"
-            exit 0
+            # 上游 dsh-v* release 与 npm 发布不同步（alpha 线仅发 GitHub 不发 npm）：
+            # 从新到旧逐条跳过无 npm 包的 release；遇到本仓库已发布的 release 即停（更旧的不回填）。
+            tag=""
+            for rel in $(gh api repos/deepseek-ai/deepseek-harness/releases --jq 'map(select((.draft | not) and (.tag_name | startswith("dsh-v"))))[0:10][].tag_name'); do
+              if gh release view "$rel" --repo '${{ github.repository }}' >/dev/null 2>&1; then
+                break
+              fi
+              if npm view "@deepseek-ai/dsh@${rel#dsh-v}" version >/dev/null 2>&1; then
+                tag="$rel"
+                break
+              fi
+              echo "跳过 $rel：npm 上无 @deepseek-ai/dsh@${rel#dsh-v}（上游该 release 未发布 npm 包），本轮不可打包。"
+            done
+            if [ -z "$tag" ]; then
+              echo '上游暂无可打包的新 release（最新 dsh-v* 均无对应 npm 包或已发布），本轮空转退出。'
+              exit 0
+            fi
+            version="${tag#dsh-v}"
           fi
           prerelease=$(gh api "repos/deepseek-ai/deepseek-harness/releases/tags/$tag" --jq '.prerelease' 2>/dev/null || echo true)
-          version="${tag#dsh-v}"
           echo "发现待打包版本: $tag (version=$version, prerelease=$prerelease)"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"

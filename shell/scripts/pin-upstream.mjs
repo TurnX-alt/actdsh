@@ -59,6 +59,13 @@ while (queue.length > 0) {
 }
 console.log('同版本线包 ' + pinnable.size + ' 个；独立版本线豁免 ' + independent.size + ' 个: ' + [...independent].sort().join(', '));
 
+// 主包在 npm 上无此 tag 版本 = 上游该 release 未发布 npm 包（如 alpha 线只发 GitHub）：
+// 提前以清晰文案失败，避免把不存在的版本写进 dependencies 后死在晦涩的 npm ETARGET。
+if (!pinnable.has('@deepseek-ai/dsh')) {
+  console.error('npm 注册表不存在 @deepseek-ai/dsh@' + V + '：上游该 release 未发布 npm 包，无法钉死版本线。');
+  process.exit(1);
+}
+
 // 2. overrides 与主包归位（先清空，防残留旧 pin 冲突）
 const manifestPath = 'package.json';
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
