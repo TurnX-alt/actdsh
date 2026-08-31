@@ -103,8 +103,10 @@ jobs:
         working-directory: shell/runtime
         run: npm install --no-audit --no-fund pnpm
 
-      # 恢复上游「全部包同一版本线」不变量：sibling 依赖以 ^ 区间发布会漂到更新兼容版，
-      # 此处把同版本线的 @deepseek-ai/* 全部钉到 tag 精确版本（独立版本线 cordis 等自动豁免）。
+      # 恢复上游「全部包同一版本线」不变量：把同版本线的 @deepseek-ai/* 全部钉到 tag 精确版本，
+      # 独立版本线（cordis 等）以各自最新稳定版显式安装（peer 闭包一并补齐）。
+      # 安装走 --legacy-peer-deps：npm 严格模式对 ~200 包 peer 图的全量解析实测 60+ 分钟不收敛
+      # （alpha.2 实证，ERESOLVE 每秒一条直到 job 超时被杀）。
       - name: 版本线钉死（release 纯度）
         working-directory: shell/runtime
         run: node ../scripts/pin-upstream.mjs "$DSH_VERSION"
