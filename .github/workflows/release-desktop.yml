@@ -195,7 +195,9 @@ jobs:
             done
             if [ -z "$READY" ]; then echo "::error::Windows 用户视角验证失败：600 秒内未检测到就绪行"; ls -la "$LOG_DIR" || true; exit 1; fi
             echo "安装+启动总耗时: $((SECONDS-START_TS)) 秒"
-            curl -fsS "$READY" | grep -qi 'DeepSeek Harness'
+            # alpha 线起就绪 URL 带一次性 token 并 303 重定向到会话：必须 -L 跟随并保存 cookie，
+            # 否则拿到的是 303 空响应体（旧校验在 alpha.2 全平台必挂，实测 -fS 退出 22/23）。
+            curl -fsSL -c /tmp/actdsh-cookie "$READY" | grep -qi 'DeepSeek Harness'
             test -f "$LOG_DIR/shims/pnpm.cmd"
             "$LOG_DIR/shims/pnpm.cmd" --version
             taskkill //F //IM actdsh.exe || true
@@ -234,7 +236,9 @@ jobs:
               sleep 5
             done
             if [ -z "$READY" ]; then echo "::error::macOS 用户视角验证失败：360 秒内未检测到就绪行"; exit 1; fi
-            curl -fsS "$READY" | grep -qi 'DeepSeek Harness'
+            # alpha 线起就绪 URL 带一次性 token 并 303 重定向到会话：必须 -L 跟随并保存 cookie，
+            # 否则拿到的是 303 空响应体（旧校验在 alpha.2 全平台必挂，实测 -fS 退出 22/23）。
+            curl -fsSL -c /tmp/actdsh-cookie "$READY" | grep -qi 'DeepSeek Harness'
             test -f "$LOG_DIR/shims/pnpm"
             "$LOG_DIR/shims/pnpm" --version
             pkill -f 'actdsh.app' || true
