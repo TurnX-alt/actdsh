@@ -101,6 +101,28 @@ jobs:
       - name: 预构建 native-system TypeScript
         run: pnpm --dir native/system run build:ts
 
+      # package-target.ts 通过 loadDesktopPackageEnvironment 强制读取 apps/desktop/.env.windows，
+      # 该文件被上游 gitignore，属于发布操作员的本地配置，干净检出时必然缺失。
+      # unsigned 模式的校验在 desktop-package-environment.mjs:85 提前返回，只要求
+      # APP_ID / NPM_REGISTRY / 强制更新策略 / Windows 打包设置四项，不需要签名与更新源凭据。
+      #
+      # 下面两个 origin 是上游自己的占位值（见 scripts/test-windows-installer.mjs:50-52），
+      # 不是真实服务地址。产物里会烘进一条指向 test.example.com 的强制更新策略；
+      # unsigned 构建的 publish 为 null、没有自动更新源，且上游测试名显示策略失败是静默的
+      # （"keeps policy failures silent while an ordinary update proceeds"）。
+      # 若要对外发布，这两个 origin 该填什么需要先定。
+      - name: 生成 unsigned 构建所需的 .env.windows
+        working-directory: apps/desktop
+        run: |
+          cat > .env.windows <<'ENV'
+          DSH_DESKTOP_APP_ID=com.deepseek.harness
+          DSH_DESKTOP_AUTO_UPDATE_ENV=test
+          DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://test.example.com
+          DSH_DESKTOP_MANDATORY_UPDATE_CONFIG='{"allowedAuthOrigins":["https://login.example.com"]}'
+          DSH_DESKTOP_WINDOWS_SIGNATURE_CACHE_CONCURRENCY=4
+          ENV
+          cat .env.windows
+
       - name: 官方打包（unsigned）
         run: pnpm package:desktop:win:x64:unsigned
 
