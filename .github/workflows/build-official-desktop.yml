@@ -47,6 +47,12 @@ jobs:
     env:
       # 上游 monorepo 装依赖时默认堆会 OOM，release-desktop.yml 里有同样的实测记录。
       NODE_OPTIONS: --max-old-space-size=4096
+      # 本 job 的 shell 是 Git Bash，PATH 里的 tar 是 GNU tar，它把 D:\... 的冒号当成
+      # host:path 远程语法，报 "Cannot connect to D: resolve failed"。上游 prepare:packages
+      # 用绝对路径调 tar -xOzf 读 tgz 里的 package.json，因此在 Windows 上必挂。
+      # --force-local 让 GNU tar 把带冒号的路径当本地文件；bsdtar 不读 TAR_OPTIONS，
+      # 所以这个变量对两种 tar 都安全。
+      TAR_OPTIONS: --force-local
     steps:
       - name: 解析目标 tag
         id: target
