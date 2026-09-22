@@ -11,21 +11,28 @@
 #   - apps/desktop/scripts/electron-builder-config.mjs:66 在配置加载期就执行该校验，
 #     所以 --config.mac.notarize=false 绕不过去
 # 要加 macOS，得先有 Apple Developer ID 或 App Store Connect API Key。
+#
+# 触发方式说明：GitHub 只登记出现在默认分支上的 workflow，纯分支上的 workflow_dispatch
+# 无法通过 API 派发，所以这里补一条 paths 限定的 push 触发——只有改到本文件才会构建，
+# 分支上的其他提交不会白跑一两个小时。
 name: 官方桌面版打包
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 上游 tag（如 dsh-v0.1.7-alpha.2）
-        required: true
+        description: 上游 tag（留空则自动取上游最新 dsh-v* release）
+        required: false
         type: string
+  push:
+    branches: [official-packaging]
+    paths: ['.github/workflows/build-official-desktop.yml']
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.tag }}
+  group: ${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -41,11 +48,28 @@ jobs:
       # 上游 monorepo 装依赖时默认堆会 OOM，release-desktop.yml 里有同样的实测记录。
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
+      - name: 解析目标 tag
+        id: target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          requested='${{ inputs.tag }}'
+          if [ -n "$requested" ]; then
+            tag="$requested"
+          else
+            tag=$(gh api 'repos/deepseek-ai/deepseek-harness/releases?per_page=20' \
+              --jq '[.[] | select(.tag_name | startswith("dsh-v"))][0].tag_name')
+          fi
+          if [ -z "$tag" ]; then echo '::error::解析不到上游 dsh-v* tag'; exit 1; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "目标 tag: $tag"
+
       - name: 检出上游源码
         uses: actions/checkout@v6
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: ${{ inputs.tag }}
+          ref: ${{ steps.target.outputs.tag }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -63,7 +87,7 @@ jobs:
         run: |
           node --version
           pnpm --version
-          echo "上游 tag: ${{ inputs.tag }}"
+          echo "上游 tag: ${{ steps.target.outputs.tag }}"
           node -p "require('./package.json').version"
 
       - name: 安装依赖
@@ -78,6 +102,6 @@ jobs:
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: official-win-x64-${{ inputs.tag }}
+          name: official-win-x64-${{ steps.target.outputs.tag }}
           path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/
           if-no-files-found: error
