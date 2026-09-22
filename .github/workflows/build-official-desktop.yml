@@ -129,15 +129,46 @@ jobs:
           ENV
           cat .env.windows
 
+      # continue-on-error 的原因：electron-builder 出完 NSIS 安装器之后，package-target.ts
+      # 还会接着跑 smoke-packaged-runtime.ts，而该冒烟测试在本 runner 上会因 LibreOffice
+      # 的 xlsx→PDF 转换失败而中止（docx 通过，原生模块与 Host 启动均正常，
+      # 报 loadComponentFromURL returned an empty reference，属 Calc 组件加载问题）。
+      # 安装器此时已经生成，所以不让冒烟失败把产物一起丢掉；冒烟结论由最后一步显式上报，
+      # 不通过就让 job 变红，避免未验证的产物看起来像是绿的。
       - name: 官方打包（unsigned）
+        id: package
+        continue-on-error: true
         run: pnpm package:desktop:win:x64:unsigned
 
-      - name: 列出产物
-        run: ls -la apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/
+      - name: 校验产物
+        id: artifact
+        working-directory: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts
+        run: |
+          set -euo pipefail
+          ls -la
+          installer=$(ls deepseek-harness-*-win-x64-unsigned.exe 2>/dev/null | head -1 || true)
+          if [ -z "$installer" ]; then
+            echo '::error::未找到 NSIS 安装器，electron-builder 实际未产出'
+            exit 1
+          fi
+          echo "安装器: $installer"
+          echo "大小: $(du -h "$installer" | cut -f1)"
+          sha256sum "$installer" | tee "$installer.sha256"
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
           name: official-win-x64-${{ steps.target.outputs.tag }}
-          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/
+          path: |
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe.sha256
           if-no-files-found: error
+
+      - name: 冒烟测试结论
+        if: always()
+        run: |
+          if [ '${{ steps.package.outcome }}' != 'success' ]; then
+            echo '::warning::官方打包命令退出非零。NSIS 安装器已生成并上传，但其后的 smoke-packaged-runtime 冒烟测试未通过，产物未经官方冒烟验证。'
+            exit 1
+          fi
+          echo '官方打包与冒烟测试全部通过。'
