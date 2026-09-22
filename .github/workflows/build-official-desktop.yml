@@ -93,6 +93,14 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      # package-target.ts 顶层静态 import 了 macos-notarization-proxy.ts，后者依赖
+      # @deepseek-ai/node-addon-system/lib/flock.js。这个 lib/ 是 tsc 产物，而生成它的
+      # 命令（package-target.ts:462 的 pnpm --dir native/system run build:ts）写在脚本
+      # 自身内部，模块解析阶段就已经失败了。上游没有任何 workflow 调用 package:desktop，
+      # 所以这个顺序问题只在干净检出时暴露，得由调用方先补上。
+      - name: 预构建 native-system TypeScript
+        run: pnpm --dir native/system run build:ts
+
       - name: 官方打包（unsigned）
         run: pnpm package:desktop:win:x64:unsigned
 
