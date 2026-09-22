@@ -1,0 +1,83 @@
+# 直接调用上游官方打包命令，产出与官方同形态的桌面版安装包。
+#
+# 与 release-desktop.yml 的分工：那条线从 npm 取 @deepseek-ai/dsh 再套自制 Electron 壳，
+# 出的是免安装 zip 与自制 dmg；这条线 checkout 上游源码，用上游自己的 electron-builder
+# 配置出包，Windows 产物是官方的 NSIS 安装器。
+#
+# 平台覆盖只有 win-x64，原因在上游而不在本仓库：
+#   - apps/desktop/scripts/package-target.ts:237 把 --unsigned 限定为 win-x64
+#   - apps/desktop/scripts/desktop-release-environment.mjs:120 强制 macOS 打包必须提供
+#     Apple 凭据（APPLE_API_KEY 三件套 / APPLE_ID 三件套 / APPLE_KEYCHAIN_PROFILE 之一）
+#   - apps/desktop/scripts/electron-builder-config.mjs:66 在配置加载期就执行该校验，
+#     所以 --config.mac.notarize=false 绕不过去
+# 要加 macOS，得先有 Apple Developer ID 或 App Store Connect API Key。
+name: 官方桌面版打包
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 上游 tag（如 dsh-v0.1.7-alpha.2）
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  win-x64:
+    name: 官方打包 windows-x64（unsigned）
+    # 上游 package-target.ts:180 要求 win-x64 必须在 Windows x64 构建机上打，不支持交叉编译。
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      # 上游 monorepo 装依赖时默认堆会 OOM，release-desktop.yml 里有同样的实测记录。
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: 检出上游源码
+        uses: actions/checkout@v6
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ inputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: 记录工具链版本
+        run: |
+          node --version
+          pnpm --version
+          echo "上游 tag: ${{ inputs.tag }}"
+          node -p "require('./package.json').version"
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 官方打包（unsigned）
+        run: pnpm package:desktop:win:x64:unsigned
+
+      - name: 列出产物
+        run: ls -la apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-win-x64-${{ inputs.tag }}
+          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/
+          if-no-files-found: error
