@@ -1,9 +1,11 @@
 # actdsh — DeepSeek Harness 桌面版（Windows / macOS）
 
-actdsh 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 dsh）的桌面分发仓库。dsh 官方只提供命令行安装方式（需要自备 Node.js 环境），actdsh 则把官方发布版本原样打包成桌面应用：下载、双击、直接使用，不需要安装 Node.js、npm 或任何其他开发环境。应用窗口内就是完整的 dsh 官方 Web 界面，配置、会话、技能、插件数据与官方版完全通用。本仓库的自动化流程每天检查一次上游新版本，Windows 与 macOS 安装包始终与上游同版本、同步发布。
+actdsh 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 dsh）的桌面分发仓库。它把官方发布版本打包成桌面应用：下载、双击、直接使用，不需要安装 Node.js、npm 或任何其他开发环境。应用窗口内就是完整的 dsh 官方 Web 界面，配置、会话、技能、插件数据与官方版完全通用。本仓库的自动化流程每天检查一次上游新版本，Windows 与 macOS 安装包始终与上游同版本、同步发布。
 
 - 上游官方仓库：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
 - 本项目性质：第三方打包分发，非 deepseek-ai 官方产品（见文末声明）
+
+上游仓库现在也自带一套桌面版（[`apps/desktop`](https://github.com/deepseek-ai/deepseek-harness/tree/master/apps/desktop)）。两边读同一份 `~/.dsh` 数据，配置和会话互相通用，装了哪个都能接着用另一个的数据。取舍见下文[与官方桌面版的区别](#与官方桌面版的区别)。
 
 ## 下载与安装
 
@@ -39,6 +41,22 @@ xattr -dr com.apple.quarantine /Applications/actdsh.app
 ```
 
 解除一次即可，之后正常从启动台打开。
+
+## 与官方桌面版的区别
+
+上游 `apps/desktop` 已经是一条完整的桌面版流水线：`pnpm dev:desktop` 在本地拉起 Electron，`pnpm package:desktop:win:x64` 和 `package:desktop:mac:arm64` 出安装包，产物上传到腾讯云 COS 的更新通道。Windows 出 NSIS 安装器，macOS 出经过签名和 Apple 公证的 dmg 与 zip。两个平台都接了 electron-updater，Windows 安装器还开了差量更新。
+
+actdsh 不改 dsh 本体，它从 npm 上的官方 `@deepseek-ai/dsh` 取同版本包，自己组装 Electron 壳，发布到 GitHub Releases。
+
+| | 官方桌面版 | actdsh |
+| --- | --- | --- |
+| Windows 形态 | NSIS 安装器，装进用户目录、不提权，安装界面含中英双语 | 免安装 zip，解压到任意位置（含 U 盘）即用，不写注册表 |
+| macOS 形态 | dmg 与 zip，已签名并经 Apple 公证 | dmg，未签名未公证，首次打开需手动放行一次 |
+| 自动更新 | 有；Windows 支持差量更新 | 无，到 Releases 下载新版覆盖 |
+| 下载渠道 | 腾讯云 COS 更新通道 | GitHub Releases |
+| 版本 | dsh 每升一版就是一次桌面版发布 | 每日 03:23 UTC 轮询上游 tag，版本号与上游一致 |
+
+官方桌面版目前仍在 alpha 线（截至 2026-09-23，上游最新为 `dsh-v0.1.7-alpha.2`）。自动更新和 macOS 免手动放行这两件事只有官方版做得到；actdsh 提供的是免安装的 Windows 绿色包，以及 GitHub Releases 这个下载渠道。
 
 ## 常见问题
 
@@ -87,7 +105,7 @@ actdsh 的版本号与上游完全一致（例如上游发布 `dsh-v0.1.0-rc.8`�
 
 ## English Summary
 
-actdsh distributes ready-to-use desktop builds of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) for Windows (x64, portable zip) and macOS (Apple Silicon, dmg). No Node.js, npm, or any other toolchain is required: the app bundles the runtime, the official web UI, and pnpm for plugin management, and stores data in the same `~/.dsh` directory as the official CLI. A GitHub Actions workflow checks upstream for a new `dsh-v*` tag once a day, builds both platforms in parallel, smoke-tests each package by actually launching it, and publishes both assets under the same tag. Third-party packaging, not an official deepseek-ai product.
+actdsh distributes ready-to-use desktop builds of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) for Windows (x64, portable zip) and macOS (Apple Silicon, dmg). No Node.js, npm, or any other toolchain is required: the app bundles the runtime, the official web UI, and pnpm for plugin management, and stores data in the same `~/.dsh` directory as the official CLI. Upstream now also builds its own desktop app from `apps/desktop`: a per-user NSIS installer on Windows and a signed, notarized dmg/zip on macOS, both published to a Tencent COS update feed and wired to electron-updater, with differential updates on the Windows installer. actdsh differs in form and channel: an installer-free Windows zip, a daily-built macOS dmg, and releases on GitHub. A GitHub Actions workflow checks upstream for a new `dsh-v*` tag once a day, builds both platforms in parallel, smoke-tests each package by actually launching it, and publishes both assets under the same tag. Third-party packaging, not an official deepseek-ai product.
 
 ## 许可与声明
 
@@ -95,4 +113,4 @@ actdsh distributes ready-to-use desktop builds of [DeepSeek Harness](https://git
 - dsh 本体：© deepseek-ai，[MIT](https://github.com/deepseek-ai/deepseek-harness/blob/master/LICENSE)。
 - actdsh 与 deepseek-ai 无隶属关系，仅为社区分发；dsh 的功能问题请反馈至[上游仓库](https://github.com/deepseek-ai/deepseek-harness/issues)。
 
-最近更新：2026-08-24
+最近更新：2026-09-23
