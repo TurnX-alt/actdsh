@@ -38,14 +38,18 @@ if (!V) {
 }
 const ROOT_PACKAGE = '@deepseek-ai/dsh';
 const SCOPE_DIR = '@deepseek-ai';
-const NPM = 'npm';
+// registry 与 npm 均可注入，默认值即生产行为。注入点存在的唯一理由是让整条脚本路径
+// 可以离线回放（见 shell/scripts/lib/pin-replay.test.mjs）：这段逻辑此前只在发布路径上
+// 跑，一次要装 267 个包，无法作为秒级反馈回路。
+const REGISTRY = (process.env.DSH_PIN_REGISTRY ?? 'https://registry.npmjs.org').replace(/\/+$/, '');
+const NPM = process.env.DSH_PIN_NPM ?? 'npm';
 const NPM_OPTS = process.platform === 'win32' ? { shell: true } : {};
 const POOL = 12;
 const INSTALL_TIMEOUT_MS = 20 * 60 * 1000;
 
 // 元数据拉取带重试：瞬断误判为独立版本线会让钉死集随网络抖动漂移（实测三跑三不同）。
 async function packument(name) {
-  const url = 'https://registry.npmjs.org/' + name.replace('/', '%2f');
+  const url = REGISTRY + '/' + name.replace('/', '%2f');
   let lastError = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
