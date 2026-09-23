@@ -6,6 +6,7 @@
   "private": true,
   "main": "main.js",
   "scripts": {
+    "test": "node --test \"scripts/lib/**/*.test.mjs\"",
     "smoke": "electron runtime/node_modules/@deepseek-ai/dsh/lib/bin.js --help",
     "pack": "electron-builder --publish never"
   },
