@@ -28,6 +28,7 @@ import {
   computeRequiredPeers,
   familyEdges,
   indexInstalledTree,
+  resolveIndependentVersions,
 } from './lib/version-line.mjs';
 
 const V = process.argv[2];
@@ -59,8 +60,10 @@ async function packument(name) {
 }
 
 // 1. 从主包出发 BFS（dependencies + peerDependencies 双通道，池化拉取）。
+//    选版留到 BFS 结束之后：独立版本线的版本由依赖方声明的区间决定，
+//    而区间要等全部边收集完才完整（ADR 0001）。
 const pinnable = new Set([ROOT_PACKAGE]);
-const independent = new Map();
+const publishedByPackage = new Map();
 const edges = new Map();
 const queue = [ROOT_PACKAGE];
 while (queue.length > 0) {
@@ -79,20 +82,25 @@ while (queue.length > 0) {
       pinnable.delete(name);
       // 家族包在 registry 上一个可用版本都没有（被撤包或废弃）。此时必须响亮失败：
       // 静默跳过会让安装包缺一个运行时核心包，而纯度闸门的意义正是不放过这种情况。
-      if (classified.version === undefined) {
+      if (classified.published.length === 0) {
         throw new Error('家族包 ' + name + ' 在 registry 上没有任何可用版本，无法钉死版本线');
       }
-      independent.set(name, classified.version);
+      publishedByPackage.set(name, classified.published);
     }
     for (const edge of familyEdges(classified.manifest)) {
       let list = edges.get(edge.name);
       if (list === undefined) edges.set(edge.name, list = []);
       list.push(edge);
-      if (!pinnable.has(edge.name) && !independent.has(edge.name) && !queue.includes(edge.name)) queue.push(edge.name);
+      if (!pinnable.has(edge.name) && !publishedByPackage.has(edge.name) && !queue.includes(edge.name)) {
+        queue.push(edge.name);
+      }
     }
   }
 }
-console.log('同版本线包 ' + pinnable.size + ' 个；独立版本线 ' + independent.size + ' 个: ' + [...independent.entries()].map(([n, v]) => n + '@' + v).sort().join(', '));
+
+const independent = resolveIndependentVersions(publishedByPackage, edges);
+console.log('同版本线包 ' + pinnable.size + ' 个；独立版本线 ' + independent.size + ' 个: '
+  + [...independent.entries()].map(([n, info]) => n + '@' + info.version).sort().join(', '));
 
 // 主包在 npm 上无此 tag 版本 = 上游该 release 未发布 npm 包（如 alpha 线只发 GitHub）：
 // 提前以清晰文案失败，避免把不存在的版本写进 dependencies 后死在晦涩的 npm ETARGET。
@@ -101,13 +109,14 @@ if (!pinnable.has(ROOT_PACKAGE)) {
   process.exit(1);
 }
 
-// 2. 主包与独立线写入 dependencies、同版本线写入 overrides（家族依赖整体重建，防残留旧 pin 冲突）。
-//    独立线只作精确依赖、不写 overrides：若某个依赖方需要其旧版本，npm 可在子树嵌套解析，
-//    那是正常行为，校验按顶层副本判定（见 ADR 0001）。
+// 2. 主包与 peer 补齐包写入 dependencies、同版本线写入 overrides（家族依赖整体重建，防残留旧 pin 冲突）。
+//    有 dep 边的独立版本线包不写进 dependencies：交给 npm 按依赖方声明的区间解析。
+//    这样树里只有一份副本，其版本必然是上游声明过的那个，清单也就不会报告一个
+//    没有任何代码在使用的版本（ADR 0001）。独立线一律不写 overrides。
 const requiredPeers = computeRequiredPeers(pinnable, independent, edges, V);
 const manifestPath = 'package.json';
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-manifest.dependencies = buildDependencies(manifest.dependencies, V, independent, requiredPeers, ROOT_PACKAGE);
+manifest.dependencies = buildDependencies(manifest.dependencies, V, requiredPeers, ROOT_PACKAGE);
 manifest.overrides = buildOverrides(pinnable, V);
 writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 
