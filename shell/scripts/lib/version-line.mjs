@@ -12,10 +12,12 @@ export function isFamilyPackage(name) {
 
 // ---- 版本比较 ----
 
+const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
+
 // 简易语义化版本比较：release 数字段优先，stable 高于同号 prerelease。
 // 独立线选版够用，不实现完整 semver。
 export function parseVersion(v) {
-  const m = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(v);
+  const m = VERSION_RE.exec(v);
   if (!m) return null;
   return { nums: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] ?? '' };
 }
@@ -39,50 +41,125 @@ export function latestStable(versions) {
   return stable.length > 0 ? stable[stable.length - 1] : sorted[sorted.length - 1];
 }
 
+// ---- 版本区间 ----
+
+// 只支持上游实际用到的三种形态：精确版、~X.Y.Z、^X.Y.Z。
+// 遇到其他形态（>=、||、workspace: 等）响亮失败，不猜测语义——
+// 猜错会让纯度闸门静默放过一个错误的版本。
+export function satisfiesRange(version, range) {
+  const r = String(range).trim();
+  if (r === '' || r === '*' || r === 'latest') return true;
+  if (parseVersion(version) === null) return false;
+
+  if (VERSION_RE.test(r)) return compareVersions(version, r) === 0;
+
+  const m = /^([~^])(\d+)\.(\d+)\.(\d+)$/.exec(r);
+  if (m === null) {
+    throw new Error('不支持的版本区间形态: ' + range + '（已支持：精确版、~X.Y.Z、^X.Y.Z）');
+  }
+  const major = Number(m[2]);
+  const minor = Number(m[3]);
+  const patch = Number(m[4]);
+  const lower = major + '.' + minor + '.' + patch;
+  let upper;
+  if (m[1] === '~') upper = major + '.' + (minor + 1) + '.0';
+  else if (major > 0) upper = (major + 1) + '.0.0';
+  else if (minor > 0) upper = '0.' + (minor + 1) + '.0';
+  else upper = '0.0.' + (patch + 1);
+  return compareVersions(version, lower) >= 0 && compareVersions(version, upper) < 0;
+}
+
+// 取会真正进入安装树的声明：dep 边，以及非 optional 的 peer 边。
+// optional peer 不会被强制安装，因此不构成约束。
+// 去重是必要的：cordis 这类被 270 条边指向的包，未去重的区间列表会让
+// 「无版本可满足」的失败消息变成不可读的一大坨。
+export function declaredRanges(name, edges) {
+  const out = [];
+  for (const e of edges.get(name) ?? []) {
+    if (e.kind !== 'dep' && !(e.kind === 'peer' && !e.optional)) continue;
+    if (typeof e.range === 'string' && !out.includes(e.range)) out.push(e.range);
+  }
+  return out;
+}
+
+export function highestSatisfying(publishedVersions, ranges) {
+  const ok = publishedVersions.filter((v) => ranges.every((r) => satisfiesRange(v, r)));
+  return ok.length === 0 ? undefined : latestStable(ok);
+}
+
+// 无声明可依（只经 optional peer 可达）时退回最新稳定版；
+// 有声明却无版本可满足时返回 undefined，由调用方响亮失败。
+export function chooseIndependentVersion(publishedVersions, ranges) {
+  if (ranges.length === 0) return latestStable(publishedVersions);
+  return highestSatisfying(publishedVersions, ranges);
+}
+
+// 仅以非 optional peer 出现、没有 dep 边的家族包必须显式声明：
+// legacy peer 解析模式下 npm 不会自动安装 peer，漏装会导致运行时缺核心包。
+export function isPeerOnly(name, edges) {
+  const es = edges.get(name) ?? [];
+  return !es.some((e) => e.kind === 'dep') && es.some((e) => e.kind === 'peer' && !e.optional);
+}
+
 // ---- 分类 ----
 
-// 判定单个家族包属于同版本线还是独立版本线。
-// packument 为 registry 元数据；缺失或无 versions 时按独立线处理（与原实现一致）。
+// 判定单个家族包属于同版本线还是独立版本线，并带回已发布版本列表，
+// 供 BFS 结束后按声明区间选版（选版依赖完整的边信息，不能在 BFS 途中定）。
 export function classifyPackage(packument, tagVersion) {
   const versions = packument?.versions ?? {};
+  const published = Object.keys(versions);
   if (versions[tagVersion]) {
-    return { kind: 'pinnable', version: tagVersion, manifest: versions[tagVersion] };
+    return { kind: 'pinnable', version: tagVersion, manifest: versions[tagVersion], published };
   }
-  const chosen = latestStable(Object.keys(versions));
   return {
     kind: 'independent',
-    version: chosen,
-    manifest: chosen === undefined ? undefined : versions[chosen],
+    version: latestStable(published),
+    manifest: versions[latestStable(published)],
+    published,
   };
 }
 
-// 取出一个包 manifest 里指向家族包的依赖边与 peer 边。
-// peer 边带 optional 标记：optional peer 不构成「必须显式补齐」。
+// 取出一个包 manifest 里指向家族包的依赖边与 peer 边，含声明区间。
 export function familyEdges(manifest) {
   const out = [];
   if (!manifest) return out;
   const pm = manifest.peerDependenciesMeta ?? {};
-  for (const dep of Object.keys(manifest.dependencies ?? {})) {
-    if (isFamilyPackage(dep)) out.push({ name: dep, kind: 'dep', optional: false });
+  for (const [dep, range] of Object.entries(manifest.dependencies ?? {})) {
+    if (isFamilyPackage(dep)) out.push({ name: dep, kind: 'dep', optional: false, range });
   }
-  for (const peer of Object.keys(manifest.peerDependencies ?? {})) {
-    if (isFamilyPackage(peer)) out.push({ name: peer, kind: 'peer', optional: pm[peer]?.optional === true });
+  for (const [peer, range] of Object.entries(manifest.peerDependencies ?? {})) {
+    if (isFamilyPackage(peer)) {
+      out.push({ name: peer, kind: 'peer', optional: pm[peer]?.optional === true, range });
+    }
+  }
+  return out;
+}
+
+// BFS 结束后统一选版：独立版本线跟随依赖方声明（ADR 0001），
+// 只有 peer 补齐包需要由本仓库写进 dependencies。
+export function resolveIndependentVersions(publishedByPackage, edges) {
+  const out = new Map();
+  for (const [name, published] of publishedByPackage) {
+    const ranges = declaredRanges(name, edges);
+    const version = chooseIndependentVersion(published, ranges);
+    if (version === undefined) {
+      throw new Error('独立版本线包 ' + name + ' 没有任何已发布版本能同时满足声明区间 '
+        + JSON.stringify(ranges) + '；已发布: ' + published.join(', '));
+    }
+    out.set(name, { version, ranges, declared: isPeerOnly(name, edges) });
   }
   return out;
 }
 
 // ---- peer 补齐 ----
 
-// 仅以非 optional peer 出现、没有 dep 边的家族包必须显式写进 dependencies：
-// legacy peer 解析模式下 npm 不会自动安装 peer，漏装会导致运行时缺核心包。
 export function computeRequiredPeers(pinnable, independent, edges, tagVersion) {
   const required = {};
-  const candidates = [...pinnable].map((n) => [n, tagVersion]).concat([...independent.entries()]);
-  for (const [name, version] of candidates) {
-    const es = edges.get(name) ?? [];
-    const hasDepEdge = es.some((e) => e.kind === 'dep');
-    const hasRequiredPeer = es.some((e) => e.kind === 'peer' && !e.optional);
-    if (!hasDepEdge && hasRequiredPeer) required[name] = version;
+  for (const name of pinnable) {
+    if (isPeerOnly(name, edges)) required[name] = tagVersion;
+  }
+  for (const [name, info] of independent) {
+    if (info.declared) required[name] = info.version;
   }
   return required;
 }
@@ -90,16 +167,13 @@ export function computeRequiredPeers(pinnable, independent, edges, tagVersion) {
 // ---- manifest 组装 ----
 
 // 家族依赖整体重建，防残留旧 pin 冲突。非家族依赖原样保留。
-export function buildDependencies(existingDependencies, tagVersion, independent, requiredPeers, rootPackage) {
+// 有 dep 边的独立版本线包不在此声明：交给 npm 按依赖方的区间解析，
+// 这样树里只有一份副本，且其版本必然是上游声明过的那个。
+export function buildDependencies(existingDependencies, tagVersion, requiredPeers, rootPackage) {
   const nonFamily = Object.fromEntries(
     Object.entries(existingDependencies ?? {}).filter(([n]) => !isFamilyPackage(n)),
   );
-  return {
-    ...nonFamily,
-    [rootPackage]: tagVersion,
-    ...Object.fromEntries(independent),
-    ...requiredPeers,
-  };
+  return { ...nonFamily, [rootPackage]: tagVersion, ...requiredPeers };
 }
 
 // 同版本线包写 overrides 强制全树收敛；独立线不写，允许子树按声明解析。
@@ -138,7 +212,7 @@ export function indexInstalledTree(entries) {
   return { topLevel, nested };
 }
 
-// 收集某个包在树里出现过的全部版本，顶层优先，其余按字典序，保证输出确定性。
+// 收集某个包在树里出现过的全部版本，顶层优先，其余按版本序，保证输出确定性。
 function allVersionsOf(name, installed) {
   const versions = [];
   const top = installed.topLevel.get(name);
@@ -173,28 +247,41 @@ export function checkRequiredPeers(requiredPeers, installed) {
     });
 }
 
-// 独立版本线按顶层副本判定：嵌套的旧副本是依赖方自己声明的结果，不是纯度缺陷。
+// 独立版本线：顶层必须存在一份副本，其版本必须满足依赖方声明的全部区间；
+// 若由本仓库显式声明（peer 补齐），还必须等于选定版本。
+// 断言对象是顶层副本——嵌套的旧副本是依赖方自己声明的结果，不是纯度缺陷。
 export function checkIndependentVersions(independent, installed) {
-  return [...independent.entries()]
-    .filter(([n, v]) => installed.topLevel.get(n) !== v)
-    .map(([n, v]) => {
-      const actual = installed.topLevel.get(n);
-      return n + '@' + v + (actual === undefined ? '（缺失）' : '（实际 ' + actual + '）');
-    });
+  const problems = [];
+  for (const [name, info] of independent) {
+    const observed = installed.topLevel.get(name);
+    if (observed === undefined) {
+      problems.push(name + '@' + info.version + '（缺失）');
+      continue;
+    }
+    if (info.declared && observed !== info.version) {
+      problems.push(name + '@' + info.version + '（实际 ' + observed + '）');
+      continue;
+    }
+    const violated = info.ranges.filter((r) => !satisfiesRange(observed, r));
+    if (violated.length > 0) {
+      problems.push(name + '@' + observed + '（不满足声明区间 ' + violated.join('、') + '）');
+    }
+  }
+  return problems;
 }
 
 // ---- 构建版本清单 ----
 
 // 清单会原样进入面向用户的发布说明（release-desktop.yml 用 jq 读 .pinnedCount
 // 与 .independent），故其形状是对外契约，改动需同步改发布说明生成。
-// .independent 取记录值而非重新观测：三处闸门已在此前证明记录值等于顶层实际安装值，
-// 闸门不过则脚本早已退出，不会走到这里。
+// .independent 取安装树顶层的观测值而非选版意图：闸门已保证它满足全部声明区间，
+// 而 CONTEXT.md 要求清单必须是观测结果。
 export function buildReport(tagVersion, pinnable, independent, installed) {
   const pinnedNames = [...pinnable].filter((n) => installed.topLevel.get(n) === tagVersion);
   return {
     tag: tagVersion,
     pinnedCount: pinnedNames.length,
     pinned: Object.fromEntries(pinnedNames.map((n) => [n, tagVersion])),
-    independent: Object.fromEntries(independent),
+    independent: Object.fromEntries([...independent.keys()].map((n) => [n, installed.topLevel.get(n)])),
   };
 }
