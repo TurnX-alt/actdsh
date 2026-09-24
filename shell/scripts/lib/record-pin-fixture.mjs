@@ -8,7 +8,7 @@
 // 用法: node shell/scripts/lib/record-pin-fixture.mjs <tag-version> <out.json>
 //       [registry-base-url]
 import { writeFileSync } from 'node:fs';
-import { classifyPackage, familyEdges, latestStable } from './version-line.mjs';
+import { latestStable, walkFamilyClosure } from './version-line.mjs';
 
 const [, , tagVersion, outFile, registryArg] = process.argv;
 if (!tagVersion || !outFile) {
@@ -55,34 +55,10 @@ function project(name, meta) {
 }
 
 const captured = new Map();
-const pinnable = new Set([ROOT_PACKAGE]);
-const publishedByPackage = new Map();
-const queue = [ROOT_PACKAGE];
-while (queue.length > 0) {
-  const chunk = queue.splice(0, POOL);
-  const metas = await Promise.all(chunk.map(async (name) => {
-    try { return await packument(name); } catch { return null; }
-  }));
-  for (let i = 0; i < chunk.length; i += 1) {
-    const name = chunk[i];
-    const meta = metas[i];
-    if (meta === null) throw new Error('packument 三次重试仍失败: ' + name);
-    if (!captured.has(name)) captured.set(name, project(name, meta));
-    const classified = classifyPackage(meta, tagVersion);
-    if (classified.kind === 'pinnable') {
-      pinnable.add(name);
-    } else {
-      pinnable.delete(name);
-      if (classified.published.length === 0) throw new Error('家族包 ' + name + ' 无可用版本');
-      publishedByPackage.set(name, classified.published);
-    }
-    for (const edge of familyEdges(classified.manifest)) {
-      if (!pinnable.has(edge.name) && !publishedByPackage.has(edge.name) && !queue.includes(edge.name)) {
-        queue.push(edge.name);
-      }
-    }
-  }
-}
+const { pinnable, publishedByPackage } = await walkFamilyClosure(ROOT_PACKAGE, tagVersion, packument, {
+  pool: POOL,
+  onVisit: (name, meta) => { if (!captured.has(name)) captured.set(name, project(name, meta)); },
+});
 
 const fixture = {
   tag: tagVersion,

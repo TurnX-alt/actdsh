@@ -24,11 +24,10 @@ import {
   checkIndependentVersions,
   checkPinnedPurity,
   checkRequiredPeers,
-  classifyPackage,
   computeRequiredPeers,
-  familyEdges,
   indexInstalledTree,
   resolveIndependentVersions,
+  walkFamilyClosure,
 } from './lib/version-line.mjs';
 
 const V = process.argv[2];
@@ -63,45 +62,10 @@ async function packument(name) {
   throw lastError ?? new Error('packument failed for ' + name);
 }
 
-// 1. 从主包出发 BFS（dependencies + peerDependencies 双通道，池化拉取）。
-//    选版留到 BFS 结束之后：独立版本线的版本由依赖方声明的区间决定，
-//    而区间要等全部边收集完才完整（ADR 0001）。
-const pinnable = new Set([ROOT_PACKAGE]);
-const publishedByPackage = new Map();
-const edges = new Map();
-const queue = [ROOT_PACKAGE];
-while (queue.length > 0) {
-  const chunk = queue.splice(0, POOL);
-  const metas = await Promise.all(chunk.map(async (name) => {
-    try { return await packument(name); } catch { return null; }
-  }));
-  for (let i = 0; i < chunk.length; i += 1) {
-    const name = chunk[i];
-    const meta = metas[i];
-    if (meta === null) throw new Error('packument 三次重试仍失败: ' + name);
-    const classified = classifyPackage(meta, V);
-    if (classified.kind === 'pinnable') {
-      pinnable.add(name);
-    } else {
-      pinnable.delete(name);
-      // 家族包在 registry 上一个可用版本都没有（被撤包或废弃）。此时必须响亮失败：
-      // 静默跳过会让安装包缺一个运行时核心包，而纯度闸门的意义正是不放过这种情况。
-      if (classified.published.length === 0) {
-        throw new Error('家族包 ' + name + ' 在 registry 上没有任何可用版本，无法钉死版本线');
-      }
-      publishedByPackage.set(name, classified.published);
-    }
-    for (const edge of familyEdges(classified.manifest)) {
-      let list = edges.get(edge.name);
-      if (list === undefined) edges.set(edge.name, list = []);
-      list.push(edge);
-      if (!pinnable.has(edge.name) && !publishedByPackage.has(edge.name) && !queue.includes(edge.name)) {
-        queue.push(edge.name);
-      }
-    }
-  }
-}
+// 1. 家族闭包 BFS（dependencies + peerDependencies 双通道，池化拉取）
+const { pinnable, publishedByPackage, edges } = await walkFamilyClosure(ROOT_PACKAGE, V, packument, { pool: POOL });
 
+// 独立版本线按依赖方声明的区间选版（ADR 0001）；无声明可依时才退回最新稳定版。
 const independent = resolveIndependentVersions(publishedByPackage, edges);
 console.log('同版本线包 ' + pinnable.size + ' 个；独立版本线 ' + independent.size + ' 个: '
   + [...independent.entries()].map(([n, info]) => n + '@' + info.version).sort().join(', '));
