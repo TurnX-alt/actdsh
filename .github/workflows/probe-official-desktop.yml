@@ -1,0 +1,40 @@
+# 官方桌面版更新通道探针：每天核对 download.deepseek.com 上的桌面版通道，与构建、发布无关。
+#
+# 为什么单独一个 workflow：上游 GitHub Releases 的 dsh-v* 全部 0 assets，桌面版只经官方 CDN
+# 分发（地图 #17 已核实）。actdsh 把定位收缩为「官方桌面版的可复现构建与独立校验」之后，
+# 官方通道的状态就是本仓库的输入，需要一个与 release-desktop.yml 无 needs 关系的独立观测点。
+#
+# 与上游版本线探针（probe-upstream.yml）的分工：那条看 npm 上的 @deepseek-ai/* 家族，
+# 守的是钉死会不会失败；这条看官方桌面版安装包本身，守的是分发状态。
+name: 官方桌面版通道探针
+
+on:
+  schedule:
+    # 每日 UTC 02:17（夹在上游版本线探针 01:41 与发布流水线 03:23 之间）
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: 官方桌面版通道探针
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      # 与上游版本线探针同样：只用 Node 内置能力与仓库自有模块，不装任何依赖。
+      - name: 核对官方更新通道
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node shell/scripts/probe-official-desktop.mjs
