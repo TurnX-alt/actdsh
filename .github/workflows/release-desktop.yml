@@ -1,6 +1,6 @@
 # actdsh 桌面版发布流水线。
 # 订阅 deepseek-ai/deepseek-harness 的 dsh-v* 新 tag，打包 Windows 桌面版并同步发布到本仓库 Releases。
-# 设计约束：轮询秒级空转退出；构建仅在有新版本时触发；上游 release 无对应 npm 包（alpha 线只发 GitHub）时跳过空转；产物先过用户视角验证才允许发布。
+# 设计约束：轮询秒级空转退出；构建仅在有新版本时触发；上游 release 无对应 npm 包（alpha 线只发 GitHub）时跳过空转；产物先过用户视角验证、并复核官方桌面版产物与通道声明一致，才允许发布。
 #
 # 2026-09-25 起只发 Windows（地图 #17 的 D1）。macOS 不再是本流水线的目标：官方自 09-24 起经
 # download.deepseek.com/dsh-desk/ 发布经 Apple 公证、带自动更新的 dmg 与 zip，而 actdsh 的 mac 产物
@@ -207,15 +207,30 @@ jobs:
       TAG: ${{ needs.poll.outputs.tag }}
       PRERELEASE: ${{ needs.poll.outputs.prerelease }}
     steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
       - uses: actions/download-artifact@v4
         with:
           pattern: pkg-*
           merge-multiple: true
           path: dist
 
+      # 官方的 dsh-v* Release 在 GitHub 上一个 assets 都没有，桌面包只走 download.deepseek.com，
+      # 于是没有任何第三方核对过「通道声明的 sha512 == CDN 上真实字节」。这一步补上这个空缺，
+      # 并把结论写进本仓库发布说明。失败即阻断发布：宁可因网络抖动重跑，也不放过声明与字节不一致。
+      - name: 复核官方桌面版产物（发布闸门）
+        id: official
+        run: node shell/scripts/verify-official-artifact.mjs win-x64
+
       - name: 生成 release notes（含上游发布说明）
         run: |
           set -euo pipefail
+          OFFICIAL_SUMMARY='${{ steps.official.outputs.summary }}'
+          if [ -z "$OFFICIAL_SUMMARY" ]; then OFFICIAL_SUMMARY='（本次未取到复核结论）'; fi
           {
             echo "对应上游 [deepseek-ai/deepseek-harness $TAG](https://github.com/deepseek-ai/deepseek-harness/releases/tag/$TAG)。"
             echo
@@ -225,7 +240,13 @@ jobs:
             echo
             echo '## 安装与运行'
             echo
-            echo 'Windows zip 解压即用（见 [README](https://github.com/${{ github.repository }}#readme)）。macOS 请直接用官方桌面版：它经 Apple 公证并带自动更新，本仓库不再产出 mac 包。'
+            echo 'Windows zip 解压即用（见 [README](https://github.com/${{ github.repository }}#readme)）。macOS 请直接用官方桌面版，它接了自动更新；本仓库不再产出 mac 包。'
+            echo
+            echo '## 官方桌面版产物复核'
+            echo
+            echo "- $OFFICIAL_SUMMARY"
+            echo
+            echo '官方经 `download.deepseek.com` 发布桌面版，其 GitHub Release 不含任何产物；这一条是本仓库对流出的字节与官方通道声明是否一致所做的独立核对。'
             echo
             echo '## 构建版本清单'
             echo

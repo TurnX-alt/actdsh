@@ -184,6 +184,29 @@ export function checkArtifactReachable(channel, head) {
 }
 
 /**
+ * 复核真正下载到的字节是否与通道声明一致。
+ * 通道里的 sha512 是 base64（上游 desktop-upload-plan.ts 用 hash.digest('base64') 写入），
+ * 调用方必须同样按 base64 供给 observed.sha512，否则必然判为不符。
+ */
+export function checkArtifactDigest(channel, observed) {
+  const problems = [];
+  const file = channel.get('files')?.[0];
+  const declaredSha = typeof file?.get('sha512') === 'string' ? file.get('sha512') : undefined;
+  const declaredSize = Number(file?.get('size'));
+  if (typeof observed.sha512 !== 'string' || observed.sha512 === '') {
+    problems.push('未取到产物 sha512');
+  } else if (declaredSha !== undefined && observed.sha512 !== declaredSha) {
+    problems.push('产物 sha512 与通道声明不符');
+  }
+  if (!Number.isSafeInteger(observed.size) || observed.size <= 0) {
+    problems.push('未取到产物字节数');
+  } else if (Number.isSafeInteger(declaredSize) && observed.size !== declaredSize) {
+    problems.push('产物 ' + observed.size + ' 字节与通道声明 ' + declaredSize + ' 不符');
+  }
+  return problems;
+}
+
+/**
  * 各通道版本是否一致。部分发布（一个平台先动）在这里现形。
  * @returns {{ version: string|null, offenders: Array<{target: string, version: string}> }}
  */
