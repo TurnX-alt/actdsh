@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   artifactUrlFor,
   channelFilename,
+  checkArtifactDigest,
   checkArtifactReachable,
   checkChannelShape,
   feedUrlFor,
@@ -106,6 +107,44 @@ test('version 缺失或非 semver 形态时报错', () => {
 test('size 非正整数时报错', () => {
   const channel = parseChannel('version: 1.2.3\nfiles:\n  - url: u\n    sha512: s\n    size: -5\n');
   assert.deepEqual(checkChannelShape(channel), ['files[0].size 不是正整数: -5']);
+});
+
+// ---- 逐字节复核 ----
+
+test('真实通道的声明值与实测一致时通过（自证：声明 sha 与 size 都用声明值）', () => {
+  const channel = parseChannel(realWin);
+  assert.deepEqual(checkArtifactDigest(channel, {
+    sha512: 'AY7f45dYO7BFrfgaLmzXNWP0pavlxkSbsehPo/WF6PXcFdDK3fF1oHUPs/4f2bzROgQvm6wSgawZ/g7UzbPRmw==',
+    size: 288245480,
+  }), []);
+});
+
+test('sha512 差一个字符就报错（换过的产物不能被判为同一个）', () => {
+  const channel = parseChannel(realWin);
+  assert.deepEqual(
+    checkArtifactDigest(channel, {
+      sha512: 'BY7f45dYO7BFrfgaLmzXNWP0pavlxkSbsehPo/WF6PXcFdDK3fF1oHUPs/4f2bzROgQvm6wSgawZ/g7UzbPRmw==',
+      size: 288245480,
+    }),
+    ['产物 sha512 与通道声明不符'],
+  );
+});
+
+test('字节数与通道声明不符时报出两个数', () => {
+  const channel = parseChannel(realWin);
+  assert.deepEqual(
+    checkArtifactDigest(channel, {
+      sha512: 'AY7f45dYO7BFrfgaLmzXNWP0pavlxkSbsehPo/WF6PXcFdDK3fF1oHUPs/4f2bzROgQvm6wSgawZ/g7UzbPRmw==',
+      size: 288245479,
+    }),
+    ['产物 288245479 字节与通道声明 288245480 不符'],
+  );
+});
+
+test('下载中断导致取不到字节或哈希时分别报错，不静默通过', () => {
+  const channel = parseChannel(realWin);
+  assert.deepEqual(checkArtifactDigest(channel, { sha512: '', size: 0 }),
+    ['未取到产物 sha512', '未取到产物字节数']);
 });
 
 // ---- 换行/引号策略漂移：读法不能依赖 js-yaml 恰好用 >- ----
