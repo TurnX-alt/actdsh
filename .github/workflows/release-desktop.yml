@@ -3,7 +3,8 @@
 # 设计约束：轮询秒级空转退出；构建仅在有新版本时触发；上游 release 无对应 npm 包（alpha 线只发 GitHub）时跳过空转；产物先过用户视角验证、并复核官方桌面版产物与通道声明一致，才允许发布。
 #
 # 2026-09-25 起只发 Windows（地图 #17 的 D1）。macOS 不再是本流水线的目标：官方自 09-24 起经
-# download.deepseek.com/dsh-desk/ 发布经 Apple 公证、带自动更新的 dmg 与 zip，而 actdsh 的 mac 产物
+# download.deepseek.com/dsh-desk/ 发布带自动更新的 dmg 与 zip，其流水线含签名与 Apple 公证步骤
+# （本仓库未校验具体版本的公证票据），而 actdsh 的 mac 产物
 # 两者皆无；每次 mac 构建还要吃 8.25 分钟 × 10 倍 macOS 计费率。actdsh 在这一层剩下的独占项是
 # Windows 免安装 zip（官方只有 NSIS 安装器），版本线钉死清单则与平台无关、随每次发布照常产出。
 name: 桌面版发布
