@@ -1,8 +1,16 @@
-# 直接调用上游官方打包命令，产出与官方同形态的桌面版安装包。
+# 从上游源码构建一次官方形态的桌面版，并把构建输入与产物指纹记成一份留证。
 #
-# 与 release-desktop.yml 的分工：那条线从 npm 取 @deepseek-ai/dsh 再套自制 Electron 壳，
-# 出的是免安装 zip 与自制 dmg；这条线 checkout 上游源码，用上游自己的 electron-builder
-# 配置出包，Windows 产物是官方的 NSIS 安装器。
+# 这条线不声称「可复现构建」。Electron + pnpm 工具链不保证字节一致（下载时点、file key、时间戳
+# 都会进产物），我们从同一个 tag 重算出的哈希与官方不同，推不出任何关于篡改的结论。它主张的是
+# 另一件更小但能证实的事：在某组输入下产出了某串字节，输入与指纹一起公布，供他人在需要时复核。
+# 「官方通道声明的 sha512 是否等于 CDN 上真实字节」这一半由 release-desktop.yml 的发布闸门负责。
+#
+# 与 release-desktop.yml 的分工：那条线从 npm 取 @deepseek-ai/dsh 再套自制 Electron 壳，出的是
+# 免安装 zip；这条线 checkout 上游源码，用上游自己的 electron-builder 配置出包，Windows 产物是
+# 官方的 NSIS 安装器形态。
+#
+# 本分支不并回 main：它有 paths 限定的 push 触发，落到默认分支上等于每次相关改动就跑一次
+# 120 分钟的 Windows 构建。要跑就用 workflow_dispatch 显式派发到本分支。
 #
 # 平台覆盖只有 win-x64，原因在上游而不在本仓库：
 #   - apps/desktop/scripts/package-target.ts:237 把 --unsigned 限定为 win-x64
@@ -154,14 +162,38 @@ jobs:
           echo "安装器: $installer"
           echo "大小: $(du -h "$installer" | cut -f1)"
           sha256sum "$installer" | tee "$installer.sha256"
+          echo "installer=$PWD/$installer" >> "$GITHUB_OUTPUT"
 
-      - name: 上传产物
+      # 本线的产出不是「一个能装的包」，而是「一次可核对的独立构建」：把输入（上游 commit、
+      # lockfile 哈希、工具链版本、命令序列）与输出（产物字节数与 sha256）绑在一份记录里。
+      # 它不声称可复现——Electron + pnpm 工具链不保证字节一致，重算哈希与官方不同推不出任何结论。
+      - name: 记录构建环境留证
+        run: |
+          set -euo pipefail
+          export REPO_ROOT="$PWD"
+          export UPSTREAM_REPO=deepseek-ai/deepseek-harness
+          export UPSTREAM_TAG='${{ steps.target.outputs.tag }}'
+          export UPSTREAM_COMMIT="$(git rev-parse HEAD)"
+          export LOCKFILE_PATH="$PWD/pnpm-lock.yaml"
+          export ARTIFACT_PATH='${{ steps.artifact.outputs.installer }}'
+          export NODE_VERSION="$(node --version)"
+          export PNPM_VERSION="$(pnpm --version)"
+          export RUNNER_IMAGE='${{ runner.image }}'
+          export COMMAND_SEQUENCE="$(printf '%s\n' 'pnpm install --frozen-lockfile' 'pnpm --dir native/system run build:ts' 'pnpm package:desktop:win:x64:unsigned')"
+          # 下面两个值取自上游 apps/desktop/.env.windows.example，是文档化占位值而非真实服务地址，
+          # 因此该产物不能作为对外发布的发行版；留证脚本会把这句备注一并写进记录。
+          export DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://test.example.com
+          export DSH_DESKTOP_MANDATORY_UPDATE_CONFIG='{"allowedAuthOrigins":["https://login.example.com"]}'
+          node shell/scripts/record-build-attestation.mjs "$(dirname "$ARTIFACT_PATH")/build-attestation.json"
+
+      - name: 上传产物与留证
         uses: actions/upload-artifact@v4
         with:
           name: official-win-x64-${{ steps.target.outputs.tag }}
           path: |
             apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe
             apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe.sha256
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/build-attestation.json
           if-no-files-found: error
 
       - name: 冒烟测试结论
