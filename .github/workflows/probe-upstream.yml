@@ -1,0 +1,61 @@
+# 实时 registry 探针：提前发现会让版本线钉死失败的上游变化。
+#
+# 与 CI 的分工（地图 #5 的决议）：CI 跑离线 fixture 回放，确定性地守判定逻辑，
+# 阻塞合并；本 workflow 打实时 registry，守的是「外部世界变了」，失败只告警、
+# 不阻塞发布——它是独立的 workflow，与 release-desktop.yml 之间没有 needs 关系。
+#
+# 为什么需要：2026-09-23 的发布失败由 registry 的真实变化触发（libreoffice-kit
+# 26 小时内连发 0.0.3 / 0.0.4 / 0.1.0），而钉死脚本只在发布路径上跑，于是第一个
+# 发现问题的时机就是发布失败本身。探针把这个时机提前。
+#
+# 排在 release-desktop.yml（03:23 UTC）之前，好让问题在构建开始前就暴露。
+name: 上游版本线探针
+
+on:
+  schedule:
+    # 每日 UTC 01:41（避开整点高峰；与发布流水线保持同样的约定）
+    - cron: '41 1 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 指定上游 tag 版本（如 0.1.7-rc.1；留空则取上游最新 release）
+        required: false
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - 'shell/scripts/probe-upstream.mjs'
+      - 'shell/scripts/lib/version-line.mjs'
+      - '.github/workflows/probe-upstream.yml'
+  # PR 上也跑：schedule 只在默认分支生效，而 workflow_dispatch 在纯分支上无法派发
+  # （GitHub 只登记出现在默认分支上的 workflow），不加这条就没有任何触发点能验证改动。
+  pull_request:
+    paths:
+      - 'shell/scripts/probe-upstream.mjs'
+      - 'shell/scripts/lib/version-line.mjs'
+      - '.github/workflows/probe-upstream.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: 实时 registry 探针
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      # 只用 Node 内置能力与仓库自有模块，不需要安装任何依赖。
+      - name: 跑探针
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node shell/scripts/probe-upstream.mjs '${{ inputs.tag }}'

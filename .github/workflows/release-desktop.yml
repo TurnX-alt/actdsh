@@ -1,6 +1,11 @@
 # actdsh 桌面版发布流水线。
-# 订阅 deepseek-ai/deepseek-harness 的 dsh-v* 新 tag，打包 Win/macOS 桌面版并同步发布到本仓库 Releases。
-# 设计约束：轮询秒级空转退出；构建仅在有新版本时触发；上游 release 无对应 npm 包（alpha 线只发 GitHub）时跳过空转；每个平台产物先过用户视角验证才允许发布。
+# 订阅 deepseek-ai/deepseek-harness 的 dsh-v* 新 tag，打包 Windows 桌面版并同步发布到本仓库 Releases。
+# 设计约束：轮询秒级空转退出；构建仅在有新版本时触发；上游 release 无对应 npm 包（alpha 线只发 GitHub）时跳过空转；产物先过用户视角验证、并复核官方桌面版产物与通道声明一致，才允许发布。
+#
+# 2026-09-25 起只发 Windows（地图 #17 的 D1）。macOS 不再是本流水线的目标：官方自 09-24 起经
+# download.deepseek.com/dsh-desk/ 发布经 Apple 公证、带自动更新的 dmg 与 zip，而 actdsh 的 mac 产物
+# 两者皆无；每次 mac 构建还要吃 8.25 分钟 × 10 倍 macOS 计费率。actdsh 在这一层剩下的独占项是
+# Windows 免安装 zip（官方只有 NSIS 安装器），版本线钉死清单则与平台无关、随每次发布照常产出。
 name: 桌面版发布
 
 on:
@@ -72,16 +77,10 @@ jobs:
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
   build:
-    name: 构建并验证 ${{ matrix.name }}
+    name: 构建并验证 windows-x64
     needs: poll
     if: needs.poll.outputs.tag != ''
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: windows-x64, os: windows-latest }
-          - { name: macos-arm64, os: macos-latest }
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     timeout-minutes: 60
     defaults:
       run:
@@ -89,7 +88,7 @@ jobs:
     env:
       DSH_VERSION: ${{ needs.poll.outputs.version }}
       TAG: ${{ needs.poll.outputs.tag }}
-      # rc.8 在 macOS runner 实测 npm install 触发 Node 堆内存 OOM（exit 134），此处抬限。
+      # rc.8 在 runner 上实测 npm install 触发 Node 堆内存 OOM（exit 134），此处抬限。
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
       - uses: actions/checkout@v6
@@ -118,16 +117,10 @@ jobs:
           set -euo pipefail
           NODE_VER=24.18.0
           mkdir -p shell/runtime/node
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-win-x64.zip" -o /tmp/node-dist.zip
-            unzip -q /tmp/node-dist.zip -d /tmp/node-dist
-            cp -R "/tmp/node-dist/node-v${NODE_VER}-win-x64/." shell/runtime/node/
-            ./shell/runtime/node/node.exe --version
-          else
-            curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-darwin-arm64.tar.gz" -o /tmp/node-dist.tar.gz
-            tar -xzf /tmp/node-dist.tar.gz -C shell/runtime/node --strip-components 1
-            ./shell/runtime/node/bin/node --version
-          fi
+          curl -fsSL "https://nodejs.org/dist/v${NODE_VER}/node-v${NODE_VER}-win-x64.zip" -o /tmp/node-dist.zip
+          unzip -q /tmp/node-dist.zip -d /tmp/node-dist
+          cp -R "/tmp/node-dist/node-v${NODE_VER}-win-x64/." shell/runtime/node/
+          ./shell/runtime/node/node.exe --version
 
       - name: 壳版本号对齐上游
         working-directory: shell
@@ -145,8 +138,6 @@ jobs:
           curl -fsSL "https://raw.githubusercontent.com/deepseek-ai/deepseek-harness/$TAG/apps/web/public/favicon.svg" -o build/favicon.svg
           node scripts/make-icon.mjs build/favicon.svg build/icon.png
           cp build/icon.png icon.png
-          node scripts/make-dmg-background.mjs
-          chmod +x "build/双击我完成安装.command"
 
       - name: 冒烟验证（Electron 内嵌 Node 拉起 dsh CLI）
         working-directory: shell
@@ -160,104 +151,47 @@ jobs:
         working-directory: shell
         run: ./node_modules/.bin/electron-builder --publish never
 
-      # macOS 26.2+ 的 Finder 不渲染 dmgbuild 旧格式 .DS_Store 背景（线上实测回归），
-      # 此处用捆绑 dmgbuild 的 python 把 dmg 布局改写为兼容格式（.background/ + pBBk 书签 + 窗口外隐藏项坐标）。
-      - name: 修复 dmg Finder 布局（macOS 26.2+ 背景兼容）
-        if: runner.os == 'macOS'
-        working-directory: shell
-        run: |
-          set -euo pipefail
-          DMGPY=$(find "$HOME/Library/Caches/electron-builder" -path '*dmgbuild-bundle*' -name 'python3.14' 2>/dev/null | head -1)
-          if [ -z "$DMGPY" ]; then echo "::error::未找到 electron-builder 捆绑 python"; exit 1; fi
-          DMGSITE="$(dirname "$DMGPY")/../lib/python3.14/site-packages"
-          PYTHONPATH="$DMGSITE" "$DMGPY" scripts/fix-dmg-finder.py "$(ls dist/*.dmg | head -1)"
-
       - name: 用户视角验证（启动产物 → 就绪信号 → GUI → 垫片）
         run: |
           set -euo pipefail
           READY=""
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            # zip 便携的用户路径：解压 → 双击 actdsh.exe。
-            ZIP=$(ls shell/dist/*.zip | head -1)
-            rm -rf /tmp/actdsh-zip && mkdir -p /tmp/actdsh-zip
-            unzip -q "$ZIP" -d /tmp/actdsh-zip
-            EXE=$(find /tmp/actdsh-zip -name actdsh.exe | head -1)
-            [ -n "$EXE" ] || { echo "::error::zip 内未找到 actdsh.exe"; exit 1; }
-            START_TS=$SECONDS
-            "$EXE" &
-            LOG_DIR="$(cygpath "$APPDATA")/actdsh"
-            for i in $(seq 1 120); do
-              if [ -f "$LOG_DIR/dsh.log" ] && grep -q 'dsh web:' "$LOG_DIR/dsh.log"; then
-                READY=$(grep -o 'dsh web: [^ ]*' "$LOG_DIR/dsh.log" | head -1 | awk '{print $3}')
-                break
-              fi
-              sleep 5
-            done
-            if [ -z "$READY" ]; then echo "::error::Windows 用户视角验证失败：600 秒内未检测到就绪行"; ls -la "$LOG_DIR" || true; exit 1; fi
-            echo "安装+启动总耗时: $((SECONDS-START_TS)) 秒"
-            # 就绪 URL 带一次性 token 并 303 重定向到会话，故必须 -L 跟随并保存 cookie，
-            # 否则 -f 会把 303 判成 HTTP 错误退出 22。响应体必须落盘再 grep：`curl | grep -q`
-            # 下 grep 命中即退出并关闭管道，curl 写剩余 body 会以 23 (CURLE_WRITE_ERROR) 失败，
-            # pipefail 再放大成整步失败——竞态，同一份脚本能连过多次后突然挂。
-            curl -fsSL -c /tmp/actdsh-cookie "$READY" -o /tmp/actdsh-ready.html
-            grep -qi 'DeepSeek Harness' /tmp/actdsh-ready.html
-            test -f "$LOG_DIR/shims/pnpm.cmd"
-            "$LOG_DIR/shims/pnpm.cmd" --version
-            taskkill //F //IM actdsh.exe || true
-          else
-            DMG=$(ls shell/dist/*.dmg | head -1)
-            hdiutil attach -nobrowse -mountpoint /tmp/actdsh-mnt "$DMG"
-            test -f "/tmp/actdsh-mnt/双击我完成安装.command"
-            test -f "/tmp/actdsh-mnt/请先读我.txt"
-            test -f "/tmp/actdsh-mnt/.background/background.png" || test -f "/tmp/actdsh-mnt/.background/background.tiff"
-            mkdir -p /tmp/actdsh-app
-            cp -R "/tmp/actdsh-mnt/actdsh.app" /tmp/actdsh-app/
-            hdiutil detach /tmp/actdsh-mnt
-            APP=/tmp/actdsh-app/actdsh.app
-            LOG_DIR="$HOME/Library/Application Support/actdsh"
-            # Gatekeeper 用户视角模拟：写入隔离属性 → open 应被拒/挂起；解除后应可运行。
-            # open(1) 在无头 runner 上可能无限挂起（实测导致 45 分钟超时），必须带看门狗。
-            xattr -w com.apple.quarantine "0003;66d3c000;Safari;" "$APP"
-            open "$APP" & OPEN_PID=$!
-            sleep 15
-            if kill -0 "$OPEN_PID" 2>/dev/null; then
-              kill "$OPEN_PID" 2>/dev/null || true
-              echo "隔离状态下 open 挂起/被拒（符合预期：Gatekeeper 拦截需用户交互）"
-            else
-              echo "open 已返回（隔离拒绝为异步时属正常）"
+          # zip 便携的用户路径：解压 → 双击 actdsh.exe。
+          ZIP=$(ls shell/dist/*.zip | head -1)
+          rm -rf /tmp/actdsh-zip && mkdir -p /tmp/actdsh-zip
+          unzip -q "$ZIP" -d /tmp/actdsh-zip
+          EXE=$(find /tmp/actdsh-zip -name actdsh.exe | head -1)
+          [ -n "$EXE" ] || { echo "::error::zip 内未找到 actdsh.exe"; exit 1; }
+          START_TS=$SECONDS
+          "$EXE" &
+          LOG_DIR="$(cygpath "$APPDATA")/actdsh"
+          for i in $(seq 1 120); do
+            if [ -f "$LOG_DIR/dsh.log" ] && grep -q 'dsh web:' "$LOG_DIR/dsh.log"; then
+              READY=$(grep -o 'dsh web: [^ ]*' "$LOG_DIR/dsh.log" | head -1 | awk '{print $3}')
+              break
             fi
-            pkill -f 'actdsh.app' || true
-            sleep 2
-            xattr -dr com.apple.quarantine "$APP"
-            # 直接执行主程序二进制（等价双击启动；绕开 open 在无头 runner 上挂起的路径）
-            "$APP/Contents/MacOS/actdsh" &
-            for i in $(seq 1 72); do
-              if [ -f "$LOG_DIR/dsh.log" ] && grep -q 'dsh web:' "$LOG_DIR/dsh.log"; then
-                READY=$(grep -o 'dsh web: [^ ]*' "$LOG_DIR/dsh.log" | head -1 | awk '{print $3}')
-                break
-              fi
-              sleep 5
-            done
-            if [ -z "$READY" ]; then echo "::error::macOS 用户视角验证失败：360 秒内未检测到就绪行"; exit 1; fi
-            # 落盘再 grep，理由同 Windows 分支：`curl | grep -q` 会因 grep 提前退出关闭管道，
-            # 让 curl 以 23 (CURLE_WRITE_ERROR) 失败并被 pipefail 放大成整步失败。
-            curl -fsSL -c /tmp/actdsh-cookie "$READY" -o /tmp/actdsh-ready.html
-            grep -qi 'DeepSeek Harness' /tmp/actdsh-ready.html
-            test -f "$LOG_DIR/shims/pnpm"
-            "$LOG_DIR/shims/pnpm" --version
-            pkill -f 'actdsh.app' || true
-          fi
-          echo "== $RUNNER_OS 用户视角验证通过: $READY =="
+            sleep 5
+          done
+          if [ -z "$READY" ]; then echo "::error::Windows 用户视角验证失败：600 秒内未检测到就绪行"; ls -la "$LOG_DIR" || true; exit 1; fi
+          echo "安装+启动总耗时: $((SECONDS-START_TS)) 秒"
+          # 就绪 URL 带一次性 token 并 303 重定向到会话，故必须 -L 跟随并保存 cookie，
+          # 否则 -f 会把 303 判成 HTTP 错误退出 22。响应体必须落盘再 grep：`curl | grep -q`
+          # 下 grep 命中即退出并关闭管道，curl 写剩余 body 会以 23 (CURLE_WRITE_ERROR) 失败，
+          # pipefail 再放大成整步失败——竞态，同一份脚本能连过多次后突然挂。
+          curl -fsSL -c /tmp/actdsh-cookie "$READY" -o /tmp/actdsh-ready.html
+          grep -qi 'DeepSeek Harness' /tmp/actdsh-ready.html
+          test -f "$LOG_DIR/shims/pnpm.cmd"
+          "$LOG_DIR/shims/pnpm.cmd" --version
+          taskkill //F //IM actdsh.exe || true
+          echo "== 用户视角验证通过: $READY =="
 
       - name: 归档构建版本清单
-        run: cp shell/runtime/upstream-versions.json "shell/dist/upstream-versions-${{ matrix.name }}.json"
+        run: cp shell/runtime/upstream-versions.json shell/dist/upstream-versions-windows-x64.json
 
       - uses: actions/upload-artifact@v4
         with:
-          name: pkg-${{ matrix.name }}
+          name: pkg-windows-x64
           path: |
             shell/dist/*.zip
-            shell/dist/*.dmg
             shell/dist/*.json
           if-no-files-found: error
           retention-days: 1
@@ -273,15 +207,30 @@ jobs:
       TAG: ${{ needs.poll.outputs.tag }}
       PRERELEASE: ${{ needs.poll.outputs.prerelease }}
     steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
       - uses: actions/download-artifact@v4
         with:
           pattern: pkg-*
           merge-multiple: true
           path: dist
 
+      # 官方的 dsh-v* Release 在 GitHub 上一个 assets 都没有，桌面包只走 download.deepseek.com，
+      # 于是没有任何第三方核对过「通道声明的 sha512 == CDN 上真实字节」。这一步补上这个空缺，
+      # 并把结论写进本仓库发布说明。失败即阻断发布：宁可因网络抖动重跑，也不放过声明与字节不一致。
+      - name: 复核官方桌面版产物（发布闸门）
+        id: official
+        run: node shell/scripts/verify-official-artifact.mjs win-x64
+
       - name: 生成 release notes（含上游发布说明）
         run: |
           set -euo pipefail
+          OFFICIAL_SUMMARY='${{ steps.official.outputs.summary }}'
+          if [ -z "$OFFICIAL_SUMMARY" ]; then OFFICIAL_SUMMARY='（本次未取到复核结论）'; fi
           {
             echo "对应上游 [deepseek-ai/deepseek-harness $TAG](https://github.com/deepseek-ai/deepseek-harness/releases/tag/$TAG)。"
             echo
@@ -291,7 +240,13 @@ jobs:
             echo
             echo '## 安装与运行'
             echo
-            echo '参见 [README](https://github.com/${{ github.repository }}#readme)：Windows zip 解压即用；macOS 打开 dmg 后双击「双击我完成安装.command」即可（也可手动 xattr 解除隔离）。'
+            echo 'Windows zip 解压即用（见 [README](https://github.com/${{ github.repository }}#readme)）。macOS 请直接用官方桌面版，它接了自动更新；本仓库不再产出 mac 包。'
+            echo
+            echo '## 官方桌面版产物复核'
+            echo
+            echo "- $OFFICIAL_SUMMARY"
+            echo
+            echo '官方经 `download.deepseek.com` 发布桌面版，其 GitHub Release 不含任何产物；这一条是本仓库对流出的字节与官方通道声明是否一致所做的独立核对。'
             echo
             echo '## 构建版本清单'
             echo
