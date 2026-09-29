@@ -13,6 +13,7 @@ import {
   compareVersions,
   declaredRanges,
   familyEdges,
+  findUnpublishedFamilyMembers,
   highestSatisfying,
   indexInstalledTree,
   isFamilyPackage,
@@ -388,4 +389,55 @@ test('buildReport 保持对外形状（release-desktop.yml 用 jq 读 .pinnedCou
   const installed = indexInstalledTree([entry('@deepseek-ai/dsh', TAG), entry(LOK, '0.0.1')]);
   const report = buildReport(TAG, new Set(['@deepseek-ai/dsh']), new Map([[LOK, indep('0.0.1', ['0.0.1'])]]), installed);
   assert.deepEqual(Object.keys(report).sort(), ['independent', 'pinned', 'pinnedCount', 'tag']);
+});
+
+// ---- 发布窗口判定（#32）----
+
+const RC = '0.2.0-rc.2';
+const ROOT = '@deepseek-ai/dsh';
+const SETTINGS = '@deepseek-ai/dsh-client-ui-settings-account';
+const CORDIS = '@deepseek-ai/cordis';
+const demands = (name, range, kind = 'dep', optional = false) => new Map([[name, [{ name, kind, optional, range }]]]);
+
+test('闭包完整时不报等待，否则每次正常发布都会空转', () => {
+  const published = new Map([[ROOT, [RC]], [SETTINGS, ['0.2.0-rc.1', RC]]]);
+  assert.deepEqual(findUnpublishedFamilyMembers(published, demands(SETTINGS, RC), RC), []);
+});
+
+test('家族包被精确声明为该版本却还没发布时列为等待，并带回它自己的最新版', () => {
+  const published = new Map([[ROOT, [RC]], [SETTINGS, ['0.1.7-rc.2', '0.2.0-rc.1']]]);
+  assert.deepEqual(findUnpublishedFamilyMembers(published, demands(SETTINGS, RC), RC),
+    [{ name: SETTINGS, latest: '0.2.0-rc.1' }]);
+});
+
+test('独立版本线包缺该版本不算等待——它本来就不跟 tag 走', () => {
+  const published = new Map([[ROOT, [RC]], [CORDIS, ['4.0.3', '4.0.4']]]);
+  assert.deepEqual(findUnpublishedFamilyMembers(published, demands(CORDIS, '~4.0.4'), RC), []);
+});
+
+test('只经 optional peer 抵达的缺口不算等待，因为没人强制要求那个版本', () => {
+  const published = new Map([[ROOT, [RC]], [SETTINGS, ['0.2.0-rc.1']]]);
+  const edges = demands(SETTINGS, RC, 'peer', true);
+  assert.deepEqual(findUnpublishedFamilyMembers(published, edges, RC), []);
+});
+
+test('非家族包即使被精确声明为该版本也不列入家族等待', () => {
+  const published = new Map([[ROOT, [RC]], ['express', ['4.18.2']]]);
+  assert.deepEqual(findUnpublishedFamilyMembers(published, demands('express', RC), RC), []);
+});
+
+test('家族包一个版本都没有发布过时列为等待，而不是崩在空列表上', () => {
+  const published = new Map([[ROOT, [RC]], [SETTINGS, []]]);
+  assert.deepEqual(findUnpublishedFamilyMembers(published, demands(SETTINGS, RC), RC),
+    [{ name: SETTINGS, latest: '(无)' }]);
+});
+
+test('多个依赖方同声明一个缺失包时只列一次', () => {
+  const published = new Map([[ROOT, [RC]], [SETTINGS, ['0.2.0-rc.1']]]);
+  const edges = new Map([[SETTINGS, [
+    { name: SETTINGS, kind: 'dep', optional: false, range: RC },
+    { name: SETTINGS, kind: 'dep', optional: false, range: RC },
+  ]]]);
+  assert.deepEqual(findUnpublishedFamilyMembers(published, edges, RC),
+    [{ name: SETTINGS, latest: '0.2.0-rc.1' }]);
 });

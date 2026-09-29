@@ -151,6 +151,27 @@ export function resolveIndependentVersions(publishedByPackage, edges) {
   return out;
 }
 
+/**
+ * 找出「闭包要求它等于 tag 版本，但 registry 上还没这个版本」的家族包。
+ *
+ * 上游的 npm 家族是分批发布的（实测根包与成员包相差 20 分钟以上），所以这种缺口通常是
+ * 发布窗口还没关，等一轮就好；它和「声明区间形态不认识 / 永远无解」是两类问题——后者等不来，
+ * 必须保持红。调用方据此决定空转退出还是构建失败。
+ *
+ * 只认精确等于 tagVersion 的声明：`~4.0.4` 那类独立版本线包本来就不跟 tag 走，
+ * 缺 tagVersion 对它们而言是正常的，不是竞态信号。
+ */
+export function findUnpublishedFamilyMembers(publishedByPackage, edges, tagVersion) {
+  const waiting = [];
+  for (const [name, published] of publishedByPackage) {
+    if (!isFamilyPackage(name)) continue;
+    if (published.includes(tagVersion)) continue;
+    if (!declaredRanges(name, edges).includes(tagVersion)) continue;
+    waiting.push({ name, latest: published.length > 0 ? published[published.length - 1] : '(无)' });
+  }
+  return waiting;
+}
+
 // ---- 家族闭包遍历 ----
 
 // 从主包出发做家族闭包 BFS（dependencies + peerDependencies 双通道，池化拉取）。

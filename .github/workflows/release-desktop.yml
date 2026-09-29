@@ -31,7 +31,7 @@ jobs:
   poll:
     name: 探测上游新 tag
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
+    timeout-minutes: 3
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     outputs:
@@ -39,6 +39,9 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
+      # 探针脚本是仓库自有文件且零依赖，poll 因此需要检出代码但不必安装任何东西。
+      - uses: actions/checkout@v6
+
       - name: 比对上游最新 dsh release、npm 可用性与本仓库已发布 tag
         id: check
         run: |
@@ -70,6 +73,22 @@ jobs:
               exit 0
             fi
             version="${tag#dsh-v}"
+          fi
+          # 闭包预检（#32）：上游的 npm 家族是分批发布的，成员包可以比根包晚 20 分钟以上
+          # （实测 rc.1：根包 12:34:03，settings-account 12:54:22）。只验根包会把构建放进一个
+          # 闭包还不完整的 registry，于是钉死步骤在发布窗口里抛错。退出码 3 表示「还没发齐」，
+          # 等一轮就好；其它非零退出是区间形态/永远无解那类问题，必须让人来看。
+          set +e
+          node shell/scripts/probe-upstream.mjs "$version"
+          closure_rc=$?
+          set -e
+          if [ "$closure_rc" = 3 ]; then
+            echo "上游家族还没发齐 $version（缺失清单见上方探针输出），本轮空转退出，不启动构建。"
+            exit 0
+          fi
+          if [ "$closure_rc" != 0 ]; then
+            echo "::error::闭包预检失败（退出码 $closure_rc）：这不是发布窗口未关，需要人工排查。"
+            exit 1
           fi
           prerelease=$(gh api "repos/deepseek-ai/deepseek-harness/releases/tags/$tag" --jq '.prerelease' 2>/dev/null || echo true)
           echo "发现待打包版本: $tag (version=$version, prerelease=$prerelease)"

@@ -55,7 +55,18 @@ jobs:
           node-version: 24
 
       # 只用 Node 内置能力与仓库自有模块，不需要安装任何依赖。
+      # 退出码 3 = 上游 npm 家族还没发齐本轮 tag（分批发布，成员包可比根包晚 20 分钟以上）。
+      # 那是会自己关上的窗口，报 warning 就够；把它染红会让每天一次的探针变成噪声源，
+      # 而探针的价值恰恰在于红了就值得看。
       - name: 跑探针
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node shell/scripts/probe-upstream.mjs '${{ inputs.tag }}'
+        run: |
+          set -uo pipefail
+          node shell/scripts/probe-upstream.mjs '${{ inputs.tag }}'
+          rc=$?
+          case "$rc" in
+            0) exit 0 ;;
+            3) echo "上游家族尚未发齐，等下一轮（详见上方缺失清单）"; exit 0 ;;
+            *) echo "::error::探针失败（退出码 $rc）"; exit "$rc" ;;
+          esac
