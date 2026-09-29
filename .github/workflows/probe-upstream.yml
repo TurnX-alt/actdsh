@@ -62,9 +62,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -uo pipefail
-          node shell/scripts/probe-upstream.mjs '${{ inputs.tag }}'
-          rc=$?
+          set -euo pipefail
+          # `|| rc=$?` 而不是 `set +e`：runner 以 `/usr/bin/bash -e` 执行本段，脚本体内不重设 -e
+          # 就仍会继承它——第一版写成 `node …; rc=$?`，node 返回 3 时脚本被 -e 直接中止，
+          # case 分支根本没跑到（PR #33 的探针运行实测退出码 3 判红）。
+          rc=0
+          node shell/scripts/probe-upstream.mjs '${{ inputs.tag }}' || rc=$?
           case "$rc" in
             0) exit 0 ;;
             3) echo "上游家族尚未发齐，等下一轮（详见上方缺失清单）"; exit 0 ;;
