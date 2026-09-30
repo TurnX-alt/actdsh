@@ -7,6 +7,15 @@
 //
 // 用法: node shell/scripts/lib/record-pin-fixture.mjs <tag-version> <out.json>
 //       [registry-base-url]
+//
+// 录制策略（#30 的结论）：**按 tag 追加，绝不就地重写。**
+// 同一 tag 在不同时刻录出来的内容并不相同——2026-09-29 真实发布把 libreoffice-kit 装成
+// 0.1.2（^0.1.1 当时 admits 的最高值），今天重录同一个 tag 得到 0.1.3。就地覆盖会让
+// 「回放与那次发布一致」这条断言无声失效，所以基线一旦落盘就不可变。
+//
+// 保留哪几份：固定的 alpha.2 形状（精确锁回归的载体，见 pin-replay.test.mjs）+ 最新 tag 一份。
+// 成本实测：录制 8 秒、单份 280-380 KB；上限由 fixtures.test.mjs 钉住。
+// 触发点：probe-upstream.mjs 每天比对基线 tag 与实时 tag，落后时报警告。
 import { writeFileSync } from 'node:fs';
 import { latestStable, walkFamilyClosure } from './version-line.mjs';
 

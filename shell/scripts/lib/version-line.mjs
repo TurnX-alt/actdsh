@@ -172,6 +172,28 @@ export function findUnpublishedFamilyMembers(publishedByPackage, edges, tagVersi
   return waiting;
 }
 
+/**
+ * 回放基线的落后判定（#30 的触发点）。
+ *
+ * 基线文件名里的 tag 就是它录制时的上游状态；探针每天已经在算实时 tag，
+ * 两者一比即知回放是否在测一个过期的图。这里只做字符串与比较，读目录归调用方。
+ *
+ * @param filenames - fixtures 目录下的文件名集合
+ * @param tagVersion - 本次探针的实时 tag 版本
+ * @returns {{ newest: string|null, lagging: boolean, count: number }}
+ */
+export function newestReplayBaseline(filenames, tagVersion) {
+  const tags = filenames
+    .map((f) => /^pin-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\.json$/.exec(f)?.[1])
+    .filter((t) => t !== undefined);
+  if (tags.length === 0) return { newest: null, lagging: true, count: 0 };
+  const newest = tags.reduce((a, b) => (compareVersions(a, b) >= 0 ? a : b));
+  // 只有基线**比实时 tag 旧**才叫落后。显式拿历史 tag 跑探针时基线反而更新，
+  // 报「落后」是说反；相等当然也不落后。
+  const lagging = newest !== tagVersion && compareVersions(newest, tagVersion) < 0;
+  return { newest, lagging, count: tags.length };
+}
+
 // ---- 家族闭包遍历 ----
 
 // 从主包出发做家族闭包 BFS（dependencies + peerDependencies 双通道，池化拉取）。
