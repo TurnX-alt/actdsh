@@ -6,8 +6,6 @@ docs.local/
 shell/icon.png
 shell/build/icon.png
 shell/build/favicon.svg
-shell/build/background.png
-shell/build/background@2x.png
 shell/runtime/upstream-versions.json
 *.log
 .DS_Store

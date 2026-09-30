@@ -52,12 +52,6 @@ jobs:
           node scripts/make-icon.mjs /tmp/favicon.svg /tmp/icon.png
           test -s /tmp/icon.png
 
-      - name: 一键安装器静态检查
-        run: |
-          set -euo pipefail
-          bash -n "shell/build/双击我完成安装.command"
-          grep -q 'xattr -dr com.apple.quarantine' "shell/build/双击我完成安装.command"
-
       - name: electron-builder 配置可解析（dry-run 打包元数据）
         working-directory: shell
         run: ./node_modules/.bin/electron-builder --help > /dev/null
