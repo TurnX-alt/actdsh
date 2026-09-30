@@ -15,11 +15,36 @@ export function isFamilyPackage(name) {
 const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
 
 // 简易语义化版本比较：release 数字段优先，stable 高于同号 prerelease。
-// 独立线选版够用，不实现完整 semver。
+// prerelease 按 semver 规则逐标识符比较（见 comparePrerelease）；不处理 build 元数据（+）。
 export function parseVersion(v) {
   const m = VERSION_RE.exec(v);
   if (!m) return null;
   return { nums: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] ?? '' };
+}
+
+// 原先这里是 pa.pre.localeCompare(pb.pre)，于是 'rc.10' < 'rc.2'——字典序在第一个数字
+// 字符上就比出 '1' < '2'。这不是假想：libreoffice-kit 历史上发过 0.0.2-rc4…rc9 这一串，
+// 再往后一个 rc10 就会被 latestStable 判为更旧，独立线选版会停在 rc9，而纯度闸门查不出
+// 来——它比的是「记录值 vs 实际装的值」，两者一致地错。
+//
+// semver 的规则：点分标识符逐个比；两个都是数字时按数值比，且数字标识符优先级低于任何
+// 字母标识符；前面全相等时标识符少者更小。字母序按 ASCII 而非 locale，避免区域设置改结果。
+function comparePrerelease(a, b) {
+  const as = a.split('.');
+  const bs = b.split('.');
+  const shared = Math.min(as.length, bs.length);
+  for (let i = 0; i < shared; i += 1) {
+    const x = as[i];
+    const y = bs[i];
+    if (x === y) continue;
+    const xNum = /^\d+$/.test(x);
+    const yNum = /^\d+$/.test(y);
+    if (xNum && yNum) return Number(x) - Number(y);
+    if (xNum) return -1;
+    if (yNum) return 1;
+    return x < y ? -1 : 1;
+  }
+  return as.length - bs.length;
 }
 
 export function compareVersions(a, b) {
@@ -32,7 +57,7 @@ export function compareVersions(a, b) {
   if (pa.pre === pb.pre) return 0;
   if (pa.pre === '') return 1;
   if (pb.pre === '') return -1;
-  return pa.pre.localeCompare(pb.pre);
+  return comparePrerelease(pa.pre, pb.pre);
 }
 
 export function latestStable(versions) {

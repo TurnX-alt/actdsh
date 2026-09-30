@@ -441,3 +441,52 @@ test('多个依赖方同声明一个缺失包时只列一次', () => {
   assert.deepEqual(findUnpublishedFamilyMembers(published, edges, RC),
     [{ name: SETTINGS, latest: '0.2.0-rc.1' }]);
 });
+
+// ---- #34：prerelease 必须按 semver 的标识符规则比，不能用字典序 ----
+
+test('rc.10 高于 rc.2，alpha.10 高于 alpha.9（字典序会判反）', () => {
+  assert.ok(compareVersions('0.2.0-rc.10', '0.2.0-rc.2') > 0);
+  assert.ok(compareVersions('0.2.0-rc.2', '0.2.0-rc.10') < 0);
+  assert.ok(compareVersions('0.2.0-alpha.10', '0.2.0-alpha.9') > 0);
+});
+
+test('同号的 stable 仍高于任何 prerelease', () => {
+  assert.ok(compareVersions('1.0.0', '1.0.0-rc.9') > 0);
+  assert.ok(compareVersions('1.0.0-rc.1', '1.0.0') < 0);
+});
+
+test('数字标识符优先级低于字母标识符（semver 规则）', () => {
+  assert.ok(compareVersions('1.0.0-1', '1.0.0-alpha') < 0);
+  assert.ok(compareVersions('1.0.0-alpha', '1.0.0-1') > 0);
+});
+
+test('前面标识符全相等时，少者更小', () => {
+  assert.ok(compareVersions('1.0.0-alpha', '1.0.0-alpha.1') < 0);
+  assert.ok(compareVersions('1.0.0-rc', '1.0.0-rc.2') < 0);
+});
+
+test('字母标识符按 ASCII 而非区域设置比较', () => {
+  // localeCompare 在部分区域下会把大小写与连字符判成不同序；这里锁死为 ASCII 序。
+  assert.ok(compareVersions('1.0.0-dev', '1.0.0-rc') < 0);
+  assert.ok(compareVersions('1.0.0-rc', '1.0.0-dev') > 0);
+});
+
+test('点分形态下 latestStable 能选到 rc.10（家族的实际命名）', () => {
+  // dsh 家族用 `0.1.7-rc.1` 这种点分形态，所以这才是本仓库会踩到的形状。
+  const list = ['0.2.0-rc.4', '0.2.0-rc.5', '0.2.0-rc.9', '0.2.0-rc.10'];
+  assert.equal([...list].sort(compareVersions).at(-1), '0.2.0-rc.10');
+  assert.equal(latestStable(list), '0.2.0-rc.10');
+});
+
+test('无点的 rc10 按 ASCII 序排在 rc9 之前——这不是我们的缺陷，semver 亦如此', () => {
+  // 标识符以点分隔；`rc10` 整体是一个字母数字标识符，按 ASCII 逐字符比，'1' < '9'。
+  // 上游 libreoffice-kit 历史上用的正是 0.0.2-rc4…rc9 这种无点形态：若它将来发 rc10，
+  // npm 自己的 semver 也会判它小于 rc9。记在这里，免得后人把它当 bug 「修」掉。
+  const list = ['0.0.2-rc9', '0.0.2-rc10'];
+  assert.equal([...list].sort(compareVersions).at(-1), '0.0.2-rc9');
+});
+
+test('两个 prerelease 完全相等时返回 0（不因为 split 产生假序）', () => {
+  assert.equal(compareVersions('1.0.0-rc.2', '1.0.0-rc.2'), 0);
+  assert.equal(compareVersions('1.0.0-rc.10', '1.0.0-rc.10'), 0);
+});
