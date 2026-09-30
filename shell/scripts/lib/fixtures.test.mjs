@@ -8,24 +8,38 @@ import { fileURLToPath } from 'node:url';
 import { newestReplayBaseline } from './version-line.mjs';
 
 const DIR = fileURLToPath(new URL('./fixtures/', import.meta.url));
-const files = readdirSync(DIR).filter((f) => f.startsWith('pin-') && f.endsWith('.json'));
+const files = readdirSync(DIR).filter((f) => f.endsWith('.json'));
+const pinFiles = files.filter((f) => f.startsWith('pin-'));
+// tree-*.json 是真实 npm 装出来的树（#28 的对账基线），与 pin-* 一样不可就地重写。
+const treeFiles = files.filter((f) => f.startsWith('tree-'));
 
 // 单份上限 512 KB：现存最大的一份是 377 KB（276 包的 alpha.2），留三成余量。
 // 投影只存 versions 的键与两个 manifest，正常增长远碰不到这条线；碰到就说明录制方式
 // 退化成存原始 packument，那才是真问题。
 const PER_FILE_CAP = 512 * 1024;
-// 目录上限 1.5 MB：策略是「固定 alpha.2 形状 + 最新 tag 一份」，两份的量级。
+// 目录上限 1.5 MB：策略是「固定 alpha.2 形状 + 最新 tag 一份 + 对应的真实树一份」。
 // 超出即说明基线在被无限累积而不是轮换。
 const DIR_CAP = 1536 * 1024;
 
-test('fixture 集合存在且按 tag 命名', () => {
-  assert.ok(files.length >= 2, '至少要有一份精确锁形状与一份当前图，实际 ' + files.join(', '));
-  for (const f of files) {
+test('基线文件按 tag 命名', () => {
+  assert.ok(pinFiles.length >= 2, '至少要有一份精确锁形状与一份当前图，实际 ' + pinFiles.join(', '));
+  for (const f of pinFiles) {
     assert.match(f, /^pin-\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?\.json$/, f + ' 命名不合规范');
+  }
+  for (const f of treeFiles) {
+    assert.match(f, /^tree-\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?-npm\.json$/, f + ' 命名不合规范');
   }
 });
 
-test('每份 fixture 不超过体积上限', () => {
+test('每份真实树基线都能找到对应的回放 fixture', () => {
+  for (const f of treeFiles) {
+    const tag = /^tree-(.+)-npm\.json$/.exec(f)[1];
+    assert.ok(pinFiles.includes('pin-' + tag + '.json'),
+      f + ' 没有配套的 pin-' + tag + '.json，对账会变成拿今天的模型比昨天的树');
+  }
+});
+
+test('每份基线不超过体积上限', () => {
   for (const f of files) {
     const size = statSync(DIR + f).size;
     assert.ok(size <= PER_FILE_CAP, f + ' 达 ' + size + ' B，超过上限 ' + PER_FILE_CAP);

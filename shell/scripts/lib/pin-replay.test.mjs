@@ -317,6 +317,35 @@ describe('pin-upstream.mjs 离线回放（0.2.0-rc.2 图：当前形态与发布
     assert.match(out, /探针通过/);
   });
 
+  // #28 的落点：把「模型预测的树」与真实 npm 装出来的树逐包对账。
+  // 基线来自 2026-09-29 那次真实发布的 upstream-versions-windows-x64.json。
+  // 结构必须完全一致；版本只允许 libreoffice-kit 一处不同（fixture 录于 09-30，
+  // 而 0.1.3 是发布之后才出现的，^0.1.1 两边都满足）——多出任何一处就说明模型偏了。
+  test('与真实 npm 安装树逐包对账：结构零差异，版本零意外', async () => {
+    const npmTree = JSON.parse(readFileSync(join(HERE, 'fixtures', 'tree-0.2.0-rc.2-npm.json'), 'utf8'));
+    const { status, dir } = await runPin('rc2');
+    assert.equal(status, 0);
+    const model = JSON.parse(readFileSync(join(dir, 'upstream-versions.json'), 'utf8'));
+
+    assert.equal(npmTree.tag, model.tag);
+    assert.deepEqual(Object.keys(model.pinned).sort(), Object.keys(npmTree.pinned).sort(),
+      '同版本线包集合必须与真实安装一致');
+    assert.deepEqual(Object.keys(model.independent).sort(), Object.keys(npmTree.independent).sort(),
+      '独立版本线包集合必须与真实安装一致');
+
+    // 同版本线全部锁在 tag 精确版本，两边都该如此
+    for (const [name, version] of Object.entries(npmTree.pinned)) {
+      assert.equal(version, GRAPHS.rc2.tag, name + ' 真实安装未锁在 tag 版本');
+      assert.equal(model.pinned[name], version, name + ' 模型与真实的锁定版本不同');
+    }
+
+    const drift = Object.entries(npmTree.independent)
+      .filter(([name, version]) => model.independent[name] !== version)
+      .map(([name, version]) => name + '（真实 ' + version + '，模型 ' + model.independent[name] + '）');
+    assert.deepEqual(drift, ['@deepseek-ai/libreoffice-kit（真实 0.1.2，模型 0.1.3）'],
+      '独立线只允许这一处 registry 漂移；新增差异意味着回放模型与 npm 的解析结果分叉');
+  });
+
   test('rc.2 图的回放同样命中 stub registry 而非真实网络', async () => {
     const { registry } = await runPin('rc2');
     assert.ok(registry.hits > 250, '本地 stub 应被大量命中，实际 ' + registry.hits);
