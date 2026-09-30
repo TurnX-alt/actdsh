@@ -15,15 +15,22 @@
 //
 // 用法: node shell/scripts/probe-upstream.mjs [tag-version]
 //       省略 tag 时取上游最新 release。
+import { readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   findUnpublishedFamilyMembers,
   highestSatisfying,
   latestStable,
+  newestReplayBaseline,
   resolveIndependentVersions,
   walkFamilyClosure,
 } from './lib/version-line.mjs';
 
 const REGISTRY = (process.env.DSH_PIN_REGISTRY ?? 'https://registry.npmjs.org').replace(/\/+$/, '');
+// 与 DSH_PIN_REGISTRY / DSH_PIN_NPM 同一约定：基线目录也可注入，好让「基线落后」这条
+// 分支有真实子进程的端到端证据，而不是只停在纯函数单测上。
+const FIXTURE_DIR = (process.env.DSH_PIN_FIXTURE_DIR ?? fileURLToPath(new URL('./lib/fixtures/', import.meta.url))).replace(/[/\\]+$/, '') + '/';
+const BASELINE_DIR = process.env.DSH_PIN_FIXTURE_DIR ?? FIXTURE_DIR;
 const ROOT_PACKAGE = '@deepseek-ai/dsh';
 const UPSTREAM_REPO = 'deepseek-ai/deepseek-harness';
 const POOL = 12;
@@ -105,6 +112,16 @@ if (waiting.length > 0) {
 
     if (diverged.length > 0) {
       console.log('::warning::独立版本线已与 npm 最新版分叉，钉死将跟随上游声明而非最新版: ' + diverged.join('; '));
+    }
+
+    // 回放基线的落后检测（#30 的触发点）。探针每天本来就在算实时闭包，比一下基线文件名
+    // 里的 tag 就知道离线套件在测哪一年的图；读的是文件名，不解析大 JSON。
+    const baseline = newestReplayBaseline(readdirSync(FIXTURE_DIR), V);
+    if (baseline.lagging) {
+      console.log('::warning::回放基线落后：最新 fixture 是 '
+        + (baseline.newest ?? '（无）') + '，实时 tag 是 ' + V
+        + '。按发布同刻追加录制（不得就地覆盖）：node shell/scripts/lib/record-pin-fixture.mjs '
+        + V + ' shell/scripts/lib/fixtures/pin-' + V + '.json');
     }
     console.log('探针通过：BFS 与选版在实时 registry 上均可完成。');
   }
