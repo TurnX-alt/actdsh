@@ -85,9 +85,15 @@ jobs:
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
           DSH_FAIL_JOB: 实时 registry 探针
-          DSH_FAIL_STEP: 跑探针
-          DSH_FAIL_LOG: ${{ runner.temp }}/probe-output.txt
+          C_PROBE: ${{ steps.probe.conclusion }}
         run: |
           set -uo pipefail
-          node shell/scripts/build-failure-card.mjs "$RUNNER_TEMP/failure-card.json"
+          # 步骤名要如实：探针没跑起来时（checkout/setup-node 挂了）把它写成「跑探针」就是假证。
+          if [ "${C_PROBE:-}" = 'failure' ]; then
+            DSH_FAIL_STEP='跑探针' DSH_FAIL_LOG="$RUNNER_TEMP/probe-output.txt" \
+              node shell/scripts/build-failure-card.mjs "$RUNNER_TEMP/failure-card.json"
+          else
+            DSH_FAIL_STEP='checkout / setup-node 或更早' DSH_FAIL_LOG='' \
+              node shell/scripts/build-failure-card.mjs "$RUNNER_TEMP/failure-card.json"
+          fi
           node shell/scripts/notify-feishu.mjs "$RUNNER_TEMP/failure-card.json"
