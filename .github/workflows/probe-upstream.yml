@@ -59,6 +59,7 @@ jobs:
       # 那是会自己关上的窗口，报 warning 就够；把它染红会让每天一次的探针变成噪声源，
       # 而探针的价值恰恰在于红了就值得看。
       - name: 跑探针
+        id: probe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -66,10 +67,27 @@ jobs:
           # `|| rc=$?` 而不是 `set +e`：runner 以 `/usr/bin/bash -e` 执行本段，脚本体内不重设 -e
           # 就仍会继承它——第一版写成 `node …; rc=$?`，node 返回 3 时脚本被 -e 直接中止，
           # case 分支根本没跑到（PR #33 的探针运行实测退出码 3 判红）。
+          # `| tee` 靠上面的 pipefail 保留 node 的退出码；日志落盘是给失败通知步骤读的。
           rc=0
-          node shell/scripts/probe-upstream.mjs '${{ inputs.tag }}' || rc=$?
+          node shell/scripts/probe-upstream.mjs '${{ inputs.tag }}' | tee "$RUNNER_TEMP/probe-output.txt" || rc=$?
           case "$rc" in
             0) exit 0 ;;
             3) echo "上游家族尚未发齐，等下一轮（详见上方缺失清单）"; exit 0 ;;
-            *) echo "::error::探针失败（退出码 $rc）"; exit "$rc" ;;
+            *) echo "::error::上游版本线探针失败（退出码 $rc）"; exit "$rc" ;;
           esac
+
+      # #29 的「红了」这一类。只在 schedule / workflow_dispatch 上发：push 与 PR 的红属于
+      # 开发过程，每次都往群里响会把信噪比打回零。退出码 3 的「等一轮」在这里判 exit 0，
+      # 所以它不会变成通知——持续等待超过 12 小时才算第三类信号，那张卡片要跨 run 计数，
+      # 属于 #29 剩下的部分。
+      - name: 失败时通知飞书
+        if: failure() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          DSH_FAIL_JOB: 实时 registry 探针
+          DSH_FAIL_STEP: 跑探针
+          DSH_FAIL_LOG: ${{ runner.temp }}/probe-output.txt
+        run: |
+          set -uo pipefail
+          node shell/scripts/build-failure-card.mjs "$RUNNER_TEMP/failure-card.json"
+          node shell/scripts/notify-feishu.mjs "$RUNNER_TEMP/failure-card.json"

@@ -6,6 +6,12 @@
 #
 # 与上游版本线探针（probe-upstream.yml）的分工：那条看 npm 上的 @deepseek-ai/* 家族，
 # 守的是钉死会不会失败；这条看官方桌面版安装包本身，守的是分发状态。
+#
+# 通知（#29）分两类信号，对应两种失败方式：
+#   红了        —— 探针判定通道不合格，或在探针之前就挂了
+#   绿着但变了  —— 探针每天都是绿的，而它观测的东西在变。2026-10-02 实测：官方 mac-x64
+#                 早在 09-29 就上架，探针连着三天输出「3/3 个通道一致」，没人知道。
+# 所以每轮把通道快照存成 artifact，下一轮取回来做语义 diff——红绿信号里没有这个信息。
 name: 官方桌面版通道探针
 
 on:
@@ -16,6 +22,8 @@ on:
 
 permissions:
   contents: read
+  # 读上一轮的 channel-snapshot、写本轮的；write 蕴含 read。
+  actions: write
 
 concurrency:
   group: ${{ github.workflow }}
@@ -33,8 +41,99 @@ jobs:
         with:
           node-version: 24
 
+      # 只在 schedule / workflow_dispatch 上通知：PR 与 push 的红绿属于开发过程，
+      # 每次都往群里发会把信噪比打回零，而这套东西的价值恰恰是「收到就该看一眼」。
+      #
+      # 取的是「最近一次成功的探针运行」的快照，跳过失败轮——失败轮的读数不可信，
+      # 一次网络抖动把三个通道都读成缺席，就会污染基线：下一轮正常时反倒报三条「新出现」。
+      - name: 取上一轮成功的通道快照
+        id: prev
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          prev_id=$(gh run list --workflow probe-official-desktop.yml --status success \
+            --limit 20 --json databaseId --jq '.[].databaseId' \
+            | grep -vx "$GITHUB_RUN_ID" | head -1)
+          if [ -z "$prev_id" ]; then
+            echo "没有可比对的历史快照（首次运行，或此前从未成功）"
+            exit 0
+          fi
+          echo "prev_run=$prev_id" >> "$GITHUB_OUTPUT"
+          mkdir -p "$RUNNER_TEMP/prev"
+          if ! gh run download "$prev_id" -n channel-snapshot -D "$RUNNER_TEMP/prev"; then
+            echo "::warning::run $prev_id 没有 channel-snapshot artifact，本轮按首次快照处理"
+            rm -rf "$RUNNER_TEMP/prev"
+          fi
+
       # 与上游版本线探针同样：只用 Node 内置能力与仓库自有模块，不装任何依赖。
+      # `| tee` 必须配 pipefail：没有它，管道状态就是 tee 的 0，node 的非零退出会被吞掉。
+      # 日志同时落 RUNNER_TEMP，失败步骤要读它——那时 stdout 已经取不回来了。
       - name: 核对官方更新通道
+        id: probe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node shell/scripts/probe-official-desktop.mjs
+          DSH_SNAPSHOT_OUT: ${{ runner.temp }}/channel-snapshot.json
+        run: |
+          set -uo pipefail
+          rc=0
+          node shell/scripts/probe-official-desktop.mjs | tee "$RUNNER_TEMP/probe-output.txt" || rc=$?
+          exit "$rc"
+
+      - name: 通道语义变化时通知飞书
+        id: change
+        if: >-
+          (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+          && steps.probe.outcome == 'success'
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          set -uo pipefail
+          cur="$RUNNER_TEMP/channel-snapshot.json"
+          if [ ! -f "$cur" ]; then
+            echo "::warning::探针没有写出快照文件，跳过差异比对"
+            exit 0
+          fi
+          prev="$RUNNER_TEMP/prev/channel-snapshot.json"
+          prev_arg=-
+          if [ -f "$prev" ]; then prev_arg="$prev"; fi
+          node shell/scripts/notify-channel-change.mjs "$prev_arg" "$cur" "$RUNNER_TEMP/change-card.json"
+          if [ -f "$RUNNER_TEMP/change-card.json" ]; then
+            node shell/scripts/notify-feishu.mjs "$RUNNER_TEMP/change-card.json"
+          fi
+
+      # 只有绿轮才入库：diff 的语义是「两次可信观测之间的变化」。
+      # 不写回仓库：那会让探针每天给自己的 workflow 制造一次 push 事件。
+      - name: 保存本轮通道快照
+        id: snapshot
+        if: steps.probe.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: channel-snapshot
+          path: ${{ runner.temp }}/channel-snapshot.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      # 通知层自己不再生成通知——否则一次发送失败会变成「关于发送失败的失败通知」，
+      # 而那一层挂了是看得见的（run 变红），不需要群里再响一次。
+      - name: 失败时通知飞书
+        if: >-
+          failure() && steps.change.conclusion != 'failure'
+          && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          DSH_FAIL_JOB: 官方桌面版通道探针
+          C_PREV: ${{ steps.prev.conclusion }}
+          C_PROBE: ${{ steps.probe.conclusion }}
+          C_SNAPSHOT: ${{ steps.snapshot.conclusion }}
+          DSH_FAIL_LOG: ${{ runner.temp }}/probe-output.txt
+        run: |
+          set -uo pipefail
+          step='checkout / setup-node 或更早'
+          log=''
+          if [ "$C_PREV" = 'failure' ]; then step='取上一轮成功的通道快照'
+          elif [ "$C_PROBE" = 'failure' ]; then step='核对官方更新通道'; log="$RUNNER_TEMP/probe-output.txt"
+          elif [ "$C_SNAPSHOT" = 'failure' ]; then step='保存本轮通道快照'; fi
+          DSH_FAIL_STEP="$step" DSH_FAIL_LOG="$log" node shell/scripts/build-failure-card.mjs "$RUNNER_TEMP/failure-card.json"
+          node shell/scripts/notify-feishu.mjs "$RUNNER_TEMP/failure-card.json"

@@ -168,6 +168,49 @@ export function buildFailureCard(failure, context) {
 }
 
 /**
+ * 从日志文本里只取脚本自己写下的诊断行（`::error::` / `::warning::` annotation）。
+ *
+ * 不做尾部 dump：日志尾部通常是 npm/PowerShell 的噪声，而原始日志行里可能有 Markdown
+ * 控制字符，卡片正文不是日志查看器。脚本要说什么，由脚本自己用 annotation 说。
+ * 没有 annotation 时返回固定文案并指向 run，而不是猜一个失败原因。
+ */
+export function excerptFromLog(text, options = {}) {
+  const { maxNotes = 6, maxChars = 200 } = options;
+  const fallback = options.fallback ?? '日志里没有脚本自己写下的诊断行，请打开 run 查看完整日志。';
+  const notes = [];
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const note = annotationOf(raw.trim());
+    if (note !== null) notes.push(note);
+  }
+  if (notes.length === 0) return fallback;
+  const picked = notes.slice(0, maxNotes).map((n) => {
+    const where = n.file === undefined ? '' : n.file + (n.line === undefined ? '' : ':' + n.line) + ' · ';
+    const body = n.message.length > maxChars ? n.message.slice(0, maxChars - 1) + '…' : n.message;
+    return (n.level === 'error' ? '❌ ' : '⚠️ ') + where + body;
+  });
+  const more = notes.length > maxNotes ? '\n（另有 ' + (notes.length - maxNotes) + ' 条诊断行，见 run）' : '';
+  return picked.join('\n') + more;
+}
+
+const ANNOTATION_LEVELS = new Set(['error', 'warning']);
+
+// 形态：`::name key=value,key=value::message`（GitHub annotation 语法）。
+// 第二段用 indexOf 而不是正则回溯：params 里不会出现 `::`，正则反而更难读。
+function annotationOf(line) {
+  if (!line.startsWith('::')) return null;
+  const end = line.indexOf('::', 2);
+  if (end === -1) return null;
+  const [level, ...kv] = line.slice(2, end).trim().split(/\s+/);
+  if (!ANNOTATION_LEVELS.has(level)) return null;
+  const message = line.slice(end + 2).trim();
+  if (message === '') return null;
+  const params = Object.fromEntries(
+    kv.join(' ').split(',').map((pair) => pair.split('=').map((s) => s.trim())).filter((p) => p.length === 2 && p[1] !== ''),
+  );
+  return { level, message, file: params.file, line: params.line };
+}
+
+/**
  * 兜底脱敏：卡片里绝不允许出现 webhook 或 token。发送脚本与探针都不该把 URL 塞进正文。
  * 命中即抛错——把密钥留在日志里比发不出通知糟得多。
  */
