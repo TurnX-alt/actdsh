@@ -8,6 +8,7 @@ import {
   buildChannelChangeCard,
   buildFailureCard,
   diffSnapshots,
+  excerptFromLog,
   snapshotOf,
 } from './feishu-card.mjs';
 
@@ -127,4 +128,50 @@ test('卡片含 webhook 地址时拒绝发送', () => {
 
 test('短于 9 字符的条目不参与脱敏，避免误伤正常文本', () => {
   assert.doesNotThrow(() => assertNoSecrets(buildAlertCard({ level: 'channel', title: 't', summary: 'run 1234567890' }), ['12345']));
+});
+
+// —— 失败卡片里的日志摘录 ——
+// 卡片不是日志查看器：只取脚本自己写下的 annotation 行，其余一律不进卡片。
+
+test('只取 error/warning annotation，忽略周围噪声', () => {
+  const log = [
+    '官方桌面版通道（https://download.deepseek.com/dsh-desk/feeds/）：',
+    '::group::install',
+    '::error::win-x64：产物探测失败 fetch failed',
+    'npm http fetch 200',
+    '::warning::3 个家族包还没发布 0.2.0-rc.2，退出码 3 表示「等一轮」。',
+    '::endgroup::',
+  ].join('\n');
+  const text = excerptFromLog(log);
+  assert.match(text, /^❌ win-x64：产物探测失败 fetch failed$/m);
+  assert.match(text, /^⚠️ 3 个家族包还没发布/m);
+  assert.equal(text.includes('npm http fetch'), false);
+  assert.equal(text.includes('::'), false);
+});
+
+test('annotation 的 file/line 参数作为位置信息保留', () => {
+  const text = excerptFromLog('::error file=shell/scripts/pin-upstream.mjs,line=88::钉死失败');
+  assert.equal(text, '❌ shell/scripts/pin-upstream.mjs:88 · 钉死失败');
+});
+
+test('没有 annotation 时指向 run，而不是猜一个原因', () => {
+  const text = excerptFromLog('Downloading...\nUnpacking...\n');
+  assert.match(text, /日志里没有脚本自己写下的诊断行/);
+});
+
+test('group/notice/空消息不是诊断行', () => {
+  assert.match(excerptFromLog('::group::x\n::notice::看起来还行\n::error::\n'), /日志里没有/);
+});
+
+test('超出条数上限时折叠并如实报数', () => {
+  const log = Array.from({ length: 9 }, (_, i) => '::error::第 ' + (i + 1) + ' 条').join('\n');
+  const text = excerptFromLog(log, { maxNotes: 6 });
+  assert.equal(text.split('\n').filter((l) => l.startsWith('❌')).length, 6);
+  assert.match(text, /另有 3 条诊断行/);
+});
+
+test('单条过长时截断，卡片不会被一条消息撑爆', () => {
+  const text = excerptFromLog('::error::' + 'x'.repeat(500), { maxChars: 200 });
+  assert.ok(text.length < 220, 'excerpt 应被截到 200 字符附近');
+  assert.match(text, /…$/);
 });

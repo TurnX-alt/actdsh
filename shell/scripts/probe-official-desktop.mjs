@@ -27,6 +27,8 @@ import {
   isAheadOfUpstream,
   parseChannel,
 } from './lib/official-desktop-feed.mjs';
+import { snapshotOf } from './lib/feishu-card.mjs';
+import { writeFileSync } from 'node:fs';
 
 const UPSTREAM_REPO = 'deepseek-ai/deepseek-harness';
 const ORIGIN = (process.env.DSH_OFFICIAL_FEED_ORIGIN ?? 'https://download.deepseek.com').replace(/\/+$/, '');
@@ -113,6 +115,22 @@ for (const target of OFFICIAL_FEED_TARGETS) {
     readings.push({ ...reading, version: reading.channel.get('version'), size: file.get('size'), releaseDate: reading.channel.get('releaseDate') });
   }
 }
+
+// 当前通道状态的机器可读快照。#29 的「绿但语义变了」全靠它与上一次运行比对——
+// 探针自己是绿的，红绿信号里没有这个信息。
+const snapshot = snapshotOf(readings.map((r) => ({
+  target: r.target,
+  present: r.state === 'present',
+  version: r.version,
+  declaredSize: r.size,
+  releaseDate: r.releaseDate,
+})), new Date().toISOString());
+// 快照落盘成 artifact，供下一次 run 比对；不写进仓库，因此不产生机器人提交。
+// 打到日志里是为了本地调试能直接看见，不作为机器读取路径。
+if (process.env.DSH_SNAPSHOT_OUT !== undefined && process.env.DSH_SNAPSHOT_OUT !== '') {
+  writeFileSync(process.env.DSH_SNAPSHOT_OUT, JSON.stringify(snapshot, null, 1) + '\n');
+}
+console.log('SNAPSHOT ' + JSON.stringify(snapshot));
 
 console.log('官方桌面版通道（' + ORIGIN + '/dsh-desk/feeds/）：');
 for (const reading of readings) {
