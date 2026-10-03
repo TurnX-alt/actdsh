@@ -14,7 +14,7 @@
 // 以便离线、秒级、确定性地测试。术语见仓库根 CONTEXT.md，
 // 独立版本线的选版依据见 docs/adr/0001-independent-version-line-follows-declared-ranges.md。
 // 用法（cwd = shell/runtime）: node ../scripts/pin-upstream.mjs <tag-version>
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, relative, sep } from 'node:path';
 import {
@@ -93,6 +93,18 @@ manifest.overrides = buildOverrides(pinnable, V);
 writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 
 // 3. 单次安装（legacy 解析 + 硬超时；超时给出明确归因而非无界卡死）
+//
+// 安装前删掉带过来的 package-lock.json——那是上一次发布留下的树形状。独立线进入预发布形态后
+// 旧槽位的版本不再满足新声明，arborist 复用这些边时只把副本放到各依赖方底下、不再提升到顶层：
+// 2026-10-03 的 dsh-v0.2.1-alpha.1 实测，带旧 lock 时 cosmokit/schemastery 顶层「缺失」而闸门判红，
+// 同一目录只删 lock 就让三个独立线包全在顶层、版本正等于记录值（cordis 侥幸没事，因为它在我们
+// 显式声明的 peer 补齐里，从根直接装）。构建的可复现性来自上面写死的 dependencies 与 overrides，
+// 不是来自一份描述旧树的锁文件。
+const lockPath = 'package-lock.json';
+if (existsSync(lockPath)) {
+  rmSync(lockPath);
+  console.log('已删除上次发布留下的 package-lock.json（钉死靠显式版本，不靠旧树形状）');
+}
 const installStart = Date.now();
 try {
   execFileSync(NPM, ['install', '--no-audit', '--no-fund', '--legacy-peer-deps'], {
