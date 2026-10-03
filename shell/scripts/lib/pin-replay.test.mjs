@@ -10,7 +10,7 @@
 // spawnSync 会阻塞事件循环，服务无法接受连接，子进程只会一路 fetch 超时。
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -213,22 +213,27 @@ describe('pin-upstream.mjs 离线回放（0.1.7-alpha.2 图：精确锁回归形
     assert.match(out, /@deepseek-ai\/dsh-util-time@0\.1\.5/);
   });
 
-  // 2026-10-03 那次发布红的真正原因不在选版，而在仓库里带过来的 package-lock.json：
-  // 上一次发布的树形状复用了旧槽位，独立线的预发布版本因此没被提升到顶层，闸门判「缺失」。
-  // 回放替身自己摆放树、不读锁文件，所以这个坑必须单独钉一条：目录里有旧 lock 时，
-  // 钉死要么把它清掉重来，要么就是会把一次正常发布判红。
-  test('旧 package-lock.json 不得参与钉死：带它跑也必须成功且旧内容被清除', async () => {
+  // 2026-10-03 那次发布红的真正原因不在选版，而在「装之前这里已经有一棵树」：runner 先跑了一步
+  // `npm install pnpm`，仓库里还带着上一次发布的 package-lock.json。npm 沿用旧树/旧锁的边摆放，
+  // 独立线的预发布版本就不被提升到顶层，闸门判「缺失」；只删 lock 的那次修复仍旧红，因为
+  // pnpm 那棵树还在。回放替身自己摆放树、不读锁文件，所以这个坑必须单独钉一条。
+  test('旧 lock 与旧 node_modules 不得参与钉死：带它们跑也必须成功且不残留', async () => {
     const registry = await startRegistry('rc2', {});
     const dir = mkdtempSync(join(tmpdir(), 'actdsh-pin-lock-'));
     tempDirs.push(dir);
     const pkgPath = join(dir, 'package.json');
     const lockPath = join(dir, 'package-lock.json');
+    const staleCopy = join(dir, 'node_modules', '@deepseek-ai', 'stale-marker');
     writeFileSync(pkgPath, JSON.stringify({
       name: 'actdsh-runtime', version: '0.0.0', private: true, dependencies: { electron: '^37.0.0' },
     }) + String.fromCharCode(10));
     writeFileSync(lockPath, JSON.stringify({ lockfileVersion: 3, packages: { stale: '上一次发布的树' } }));
+    mkdirSync(staleCopy, { recursive: true });
+    writeFileSync(join(staleCopy, 'package.json'),
+      JSON.stringify({ name: '@deepseek-ai/stale-marker', version: '9.9.9' }));
+    let out = '';
     try {
-      await run(process.execPath, [PIN_SCRIPT, GRAPHS.rc2.tag], {
+      const r = await run(process.execPath, [PIN_SCRIPT, GRAPHS.rc2.tag], {
         cwd: dir,
         maxBuffer: 32 * 1024 * 1024,
         env: {
@@ -238,12 +243,15 @@ describe('pin-upstream.mjs 离线回放（0.1.7-alpha.2 图：精确锁回归形
           PIN_REPLAY_FIXTURE: join(HERE, 'fixtures', GRAPHS.rc2.file),
         },
       });
+      out = String(r.stdout ?? '') + String(r.stderr ?? '');
     } catch (error) {
-      assert.fail('带旧 lock 时钉死应成功，实际输出：'
+      assert.fail('带旧树跑钉死应成功，实际输出：'
         + String((error.stdout ?? '') + (error.stderr ?? '')).slice(-800));
     }
-    // 真实 npm 会在装完后重新生成 lock；回放替身只物化树、不写 lock，所以两种结果都算合格：
-    // 文件已不在，或存在但旧内容没留下。缺这一个断言就会把替身的行为误当成 bug。
+    assert.match(out, /已清除上次安装留下的 package-lock\.json/);
+    assert.match(out, /已清除上次安装留下的 node_modules/);
+    assert.equal(existsSync(staleCopy), false, '旧 node_modules 里的副本不该活到新一轮');
+    // 真实 npm 装完会重新生成 lock；替身只物化树、不写 lock，所以文件存在时才校验内容。
     if (existsSync(lockPath)) {
       const after = JSON.parse(readFileSync(lockPath, 'utf8'));
       assert.equal(after.packages?.stale, undefined, '旧 lock 的内容不该活到新一轮');
