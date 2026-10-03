@@ -5,7 +5,8 @@
 // （libreoffice-kit 26 小时内连发 0.0.3 / 0.0.4 / 0.1.0），而钉死脚本只在发布路径上跑，
 // 于是第一个发现问题的时机就是发布失败本身。
 //
-// 探针只做 BFS + 选版，不装包、不写文件，因此可以每天跑。
+// 探针只做 BFS + 选版，不装包；只有在显式给出 DSH_WAITING_OUT 时才写那一个等待状态文件。
+// 因此可以每天跑。
 // 会硬失败的三种情况：
 //   1. 出现未支持的版本区间形态（>=、||、workspace: 等）——satisfiesRange 会抛
 //   2. 某个独立版本线包没有任何已发布版本能同时满足全部声明区间
@@ -15,7 +16,7 @@
 //
 // 用法: node shell/scripts/probe-upstream.mjs [tag-version]
 //       省略 tag 时取上游最新 release。
-import { readdirSync } from 'node:fs';
+import { readdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   findUnpublishedFamilyMembers,
@@ -83,6 +84,17 @@ if (waiting.length > 0) {
   console.log('闭包尚未发布完整（等待上游发布窗口关闭，本轮不可打包）：');
   for (const item of waiting) console.log('  缺 ' + V + '：' + item.name + '（最新 ' + item.latest + '）');
   console.log('::warning::' + waiting.length + ' 个家族包还没发布 ' + V + '，退出码 3 表示「等一轮」。');
+  // 机器可读的等待状态，#41 靠它跨 run 计数。与通道快照同一套做法：stdout 是给人看的，
+  // 判定要用结构化数据——从「N 个家族包还没发布」这种散文里 grep 数字，改天换措辞就静默失效。
+  if (process.env.DSH_WAITING_OUT !== undefined && process.env.DSH_WAITING_OUT !== '') {
+    writeFileSync(process.env.DSH_WAITING_OUT, JSON.stringify({
+      schemaVersion: 1,
+      tag: V,
+      missingCount: waiting.length,
+      missing: waiting.map((item) => item.name),
+      checkedAt: new Date().toISOString(),
+    }, null, 1) + '\n');
+  }
   // 用 exitCode 而非 exit()：脚本留着未关闭的 fetch 连接，Windows 上 exit() 会在 libuv
   // 断言处崩溃，把退出码变成 0xC0000409——调用方分支于退出码，崩溃会让判定失真。
   process.exitCode = 3;

@@ -9,6 +9,7 @@ import {
   buildFailureCard,
   diffSnapshots,
   excerptFromLog,
+  runUrlFromEnv,
   snapshotOf,
 } from './feishu-card.mjs';
 
@@ -174,4 +175,21 @@ test('单条过长时截断，卡片不会被一条消息撑爆', () => {
   const text = excerptFromLog('::error::' + 'x'.repeat(500), { maxChars: 200 });
   assert.ok(text.length < 220, 'excerpt 应被截到 200 字符附近');
   assert.match(text, /…$/);
+});
+
+// —— run 链接 ——
+// 卡片上的按钮点了要能到地方。三处调用点以前各自拼字符串，拼出过 "undefined/x/actions/runs/"
+// 这种非空但无效的链接；收敛成一个函数并钉住缺项时的行为。
+test('环境变量齐全时才拼出 run 链接', () => {
+  assert.equal(
+    runUrlFromEnv({ GITHUB_SERVER_URL: 'https://github.com/', GITHUB_REPOSITORY: 'a/b', GITHUB_RUN_ID: '42' }),
+    'https://github.com/a/b/actions/runs/42',
+  );
+});
+
+test('缺任一项就返回空串，让调用方不放按钮', () => {
+  assert.equal(runUrlFromEnv({ GITHUB_REPOSITORY: 'a/b', GITHUB_RUN_ID: '42' }), '');
+  assert.equal(runUrlFromEnv({ GITHUB_SERVER_URL: 'https://github.com', GITHUB_RUN_ID: '42' }), '');
+  assert.equal(runUrlFromEnv({ GITHUB_SERVER_URL: 'https://github.com', GITHUB_REPOSITORY: 'a/b' }), '');
+  assert.equal(runUrlFromEnv({}), '');
 });

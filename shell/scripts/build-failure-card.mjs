@@ -7,7 +7,7 @@
 //   DSH_FAIL_JOB / DSH_FAIL_STEP / DSH_FAIL_LOG  由 workflow 显式给出
 import { readFileSync, writeFileSync } from 'node:fs';
 
-import { buildFailureCard, excerptFromLog } from './lib/feishu-card.mjs';
+import { buildFailureCard, excerptFromLog, runUrlFromEnv } from './lib/feishu-card.mjs';
 
 const out = process.argv[2];
 if (out === undefined) {
@@ -32,7 +32,7 @@ if (out === undefined) {
     runId,
     event: env.GITHUB_EVENT_NAME ?? '(未知)',
     branch: env.GITHUB_REF_NAME ?? '(未知)',
-    runUrl: env.GITHUB_SERVER_URL === undefined || runId === '' ? '' : env.GITHUB_SERVER_URL + '/' + repo + '/actions/runs/' + runId,
+    runUrl: runUrlFromEnv(),
     excerpt: excerptFromLog(log),
   }, { repo });
   writeFileSync(out, JSON.stringify(card));

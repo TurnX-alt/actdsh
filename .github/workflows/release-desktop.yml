@@ -22,6 +22,8 @@ on:
 
 permissions:
   contents: write
+  # #41 的等待状态走 artifact（与通道快照同一做法）：读写都要，write 蕴含 read。
+  actions: write
 
 concurrency:
   group: ${{ github.workflow }}
@@ -31,7 +33,8 @@ jobs:
   poll:
     name: 探测上游新 tag
     runs-on: ubuntu-24.04
-    timeout-minutes: 3
+    # 3 分钟够探针跑一轮；加上取回上一轮等待状态（最多回溯 15 个 run）后留到 6 分钟。
+    timeout-minutes: 6
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     outputs:
@@ -42,8 +45,34 @@ jobs:
       # 探针脚本是仓库自有文件且零依赖，poll 因此需要检出代码但不必安装任何东西。
       - uses: actions/checkout@v6
 
+      # #41：poll 在发布窗口内以退出码 3 空转，窗口本身会自己关上，所以不该炸构建。
+      # 但没有东西区分「正常等 20 分钟」和「等了三天还在等」——这一步把上一轮的等待状态取回来。
+      #
+      # 回溯而不是「上一次 run」：只有仍在等待的轮次才写状态，正常发布的那些轮次没有这个 artifact。
+      # 找到第一个有的就停；15 个 run 是日粒度下的回溯上限。
+      - name: 取上一轮的等待状态
+        id: waiting-prev
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/waiting-prev"
+          for id in $(gh run list --workflow release-desktop.yml --limit 15 --json databaseId \
+            --jq '.[].databaseId' | grep -vx "$GITHUB_RUN_ID"); do
+            if gh run download "$id" -n waiting-state -D "$RUNNER_TEMP/waiting-prev" >/dev/null 2>&1; then
+              echo "found_run=$id" >> "$GITHUB_OUTPUT"
+              echo "取回 run $id 的等待状态："
+              cat "$RUNNER_TEMP/waiting-prev/waiting-state.json"
+              exit 0
+            fi
+          done
+          echo "没有历史等待状态（本轮起算）"
+
       - name: 比对上游最新 dsh release、npm 可用性与本仓库已发布 tag
         id: check
+        env:
+          DSH_WAITING_OUT: ${{ runner.temp }}/waiting-now.json
         run: |
           set -euo pipefail
           forced='${{ inputs.tag }}'
@@ -95,6 +124,41 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
+      # 等待时长与是否该发卡片。continue-on-error 是有意的：poll 的退出码/output 是 build 的开关，
+      # 把「通知没发出去」变成「不发版」是本末倒置。告警层坏了在 CI 上看得见（步骤标红），就够了。
+      #
+      # `if: always()` 同因：check 步骤判红时链条也不能断，否则下一轮从头计时，
+      # 「等了多久」这条信号永远不会越过阈值。
+      - name: 持续等待超阈值时通知飞书
+        id: waiting
+        if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        continue-on-error: true
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          set -uo pipefail
+          cur="$RUNNER_TEMP/waiting-now.json"
+          if [ ! -f "$cur" ]; then
+            echo "本轮没在等（闭包完整，或根本没探到候选版本），不更新等待状态。"
+            exit 0
+          fi
+          prev="$RUNNER_TEMP/waiting-prev/waiting-state.json"
+          prev_arg=-
+          if [ -f "$prev" ]; then prev_arg="$prev"; fi
+          node shell/scripts/notify-waiting.mjs "$prev_arg" "$cur" "$RUNNER_TEMP/waiting-state.json" "$RUNNER_TEMP/waiting-card.json"
+          if [ -f "$RUNNER_TEMP/waiting-card.json" ]; then
+            node shell/scripts/notify-feishu.mjs "$RUNNER_TEMP/waiting-card.json"
+          fi
+
+      - name: 保存等待状态
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: waiting-state
+          path: ${{ runner.temp }}/waiting-state.json
+          retention-days: 30
+          if-no-files-found: ignore
 
   build:
     name: 构建并验证 windows-x64
