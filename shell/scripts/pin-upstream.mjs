@@ -21,12 +21,12 @@ import {
   buildDependencies,
   buildOverrides,
   buildReport,
+  resolveIndependentVersions,
   checkIndependentVersions,
   checkPinnedPurity,
   checkRequiredPeers,
   computeRequiredPeers,
   indexInstalledTree,
-  resolveIndependentVersions,
   walkFamilyClosure,
 } from './lib/version-line.mjs';
 
@@ -63,11 +63,15 @@ async function packument(name) {
 }
 
 // 1. 家族闭包 BFS（dependencies + peerDependencies 双通道，池化拉取）
-const { pinnable, publishedByPackage, edges } = await walkFamilyClosure(ROOT_PACKAGE, V, packument, { pool: POOL });
+const { pinnable, publishedByPackage, distTagsByPackage, edges, rounds } =
+  await walkFamilyClosure(ROOT_PACKAGE, V, packument, { pool: POOL });
 
-// 独立版本线按依赖方声明的区间选版（ADR 0001）；无声明可依时才退回最新稳定版。
-const independent = resolveIndependentVersions(publishedByPackage, edges);
-console.log('同版本线包 ' + pinnable.size + ' 个；独立版本线 ' + independent.size + ' 个: '
+// 选版在闭包迭代到定点的边上进行（ADR 0001 + 0002）：边来自真正装配那份代码的声明。
+const independent = resolveIndependentVersions(publishedByPackage, edges, { tagVersion: V, distTagsByPackage });
+const byTag = [...independent.values()].filter((i) => i.chosenBy === 'upstream-release-tag').length;
+console.log('同版本线包 ' + pinnable.size + ' 个；独立版本线 ' + independent.size + ' 个'
+  + '（其中 ' + byTag + ' 个照上游发布 tag 定版、' + (independent.size - byTag) + ' 个按声明区间求解；'
+  + '闭包迭代 ' + rounds + ' 轮收敛）: '
   + [...independent.entries()].map(([n, info]) => n + '@' + info.version).sort().join(', '));
 
 // 主包在 npm 上无此 tag 版本 = 上游该 release 未发布 npm 包（如 alpha 线只发 GitHub）：

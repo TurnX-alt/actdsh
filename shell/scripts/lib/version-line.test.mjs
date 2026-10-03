@@ -16,12 +16,14 @@ import {
   findUnpublishedFamilyMembers,
   highestSatisfying,
   indexInstalledTree,
+  releaseDistTag,
   isFamilyPackage,
   isPeerOnly,
   latestStable,
   nestingDepth,
   parseVersion,
   resolveIndependentVersions,
+  walkFamilyClosure,
   satisfiesRange,
 } from './version-line.mjs';
 
@@ -188,7 +190,8 @@ test('resolveIndependentVersions：alpha.2 的真实形态——精确锁 0.0.1 
     new Map([[LOK, ['0.0.1', '0.0.3', '0.0.4', '0.1.0']]]),
     edges,
   );
-  assert.deepEqual(resolved.get(LOK), { version: '0.0.1', ranges: ['0.0.1'], declared: false });
+  assert.deepEqual(resolved.get(LOK),
+    { version: '0.0.1', ranges: ['0.0.1'], declared: false, chosenBy: 'declared-ranges' });
 });
 
 test('resolveIndependentVersions：rc.1 的 ^0.1.0 会选到 0.1.0', () => {
@@ -209,7 +212,7 @@ test('resolveIndependentVersions：peer-only 包标记为需显式声明', () =>
     edges,
   );
   assert.deepEqual(resolved.get('@deepseek-ai/cordis-plugin-group'), {
-    version: '1.0.4', ranges: ['~1.0.4'], declared: true,
+    version: '1.0.4', ranges: ['~1.0.4'], declared: true, chosenBy: 'declared-ranges',
   });
 });
 
@@ -489,4 +492,168 @@ test('无点的 rc10 按 ASCII 序排在 rc9 之前——这不是我们的缺�
 test('两个 prerelease 完全相等时返回 0（不因为 split 产生假序）', () => {
   assert.equal(compareVersions('1.0.0-rc.2', '1.0.0-rc.2'), 0);
   assert.equal(compareVersions('1.0.0-rc.10', '1.0.0-rc.10'), 0);
+});
+
+// —— 带预发布后缀的区间（2026-10-03 上游首次出现：dsh@0.2.1-alpha.1 声明 cordis ~4.0.5-alpha.1）——
+// 原实现只认整数三段，于是探针在「新形态」上抛「不支持的形态」，把一次正常发布报成人工排查级别。
+
+test('satisfiesRange 认得 ~X.Y.Z-预发布，并按 node-semver 的三元组规则放行候选', () => {
+  assert.equal(satisfiesRange('4.0.5-alpha.1', '~4.0.5-alpha.1'), true, '下界自身必须满足');
+  assert.equal(satisfiesRange('4.0.5-beta.2', '~4.0.5-alpha.1'), true, '同三元组、标识符更高的预发布也满足');
+  assert.equal(satisfiesRange('4.0.5', '~4.0.5-alpha.1'), true, '同号稳定版高于其预发布');
+  assert.equal(satisfiesRange('4.0.9', '~4.0.5-alpha.1'), true);
+  assert.equal(satisfiesRange('4.0.4', '~4.0.5-alpha.1'), false, '低于下界');
+  assert.equal(satisfiesRange('4.1.0', '~4.0.5-alpha.1'), false, '~ 只放开 patch');
+  assert.equal(satisfiesRange('4.1.0-alpha.1', '~4.0.5-alpha.1'), false, '三元组不同的预发布不满足');
+  assert.equal(satisfiesRange('4.0.6-alpha.1', '~4.0.5-alpha.1'), false,
+    '4.0.6 的预发布不满足：区间没把候选面放开到那个三元组');
+});
+
+test('satisfiesRange 对 ^X.Y.Z-预发布放开整个主版本', () => {
+  assert.equal(satisfiesRange('4.0.5-alpha.1', '^4.0.5-alpha.1'), true);
+  assert.equal(satisfiesRange('4.9.0', '^4.0.5-alpha.1'), true);
+  assert.equal(satisfiesRange('5.0.0', '^4.0.5-alpha.1'), false);
+  assert.equal(satisfiesRange('4.0.4', '^4.0.5-alpha.1'), false);
+});
+
+test('satisfiesRange 认得不完整的 ~ / ^ 形态（~ 只锁到最后一个给定数字）', () => {
+  assert.equal(satisfiesRange('4.9.9', '~4'), true);
+  assert.equal(satisfiesRange('5.0.0', '~4'), false);
+  assert.equal(satisfiesRange('4.0.9', '~4.0'), true);
+  assert.equal(satisfiesRange('4.1.0', '~4.0'), false);
+  assert.equal(satisfiesRange('4.5.0', '^4.0'), true);
+  assert.equal(satisfiesRange('5.0.0', '^4.0'), false);
+  assert.equal(satisfiesRange('0.0.9', '^0.0'), true);
+  assert.equal(satisfiesRange('0.1.0', '^0.0'), false, '^0.0 没给补丁号时不锁成 0.0.z');
+  assert.equal(satisfiesRange('0.0.3', '^0.0.3'), true);
+  assert.equal(satisfiesRange('0.0.4', '^0.0.3'), false, '^0.0.z 只放开补丁');
+  assert.equal(satisfiesRange('0.9.9', '^0'), true);
+  assert.equal(satisfiesRange('1.0.0', '^0'), false);
+});
+
+test('satisfiesRange 仍然拒绝不认识的形态，不因为放宽就猜', () => {
+  for (const bad of ['>=1.2.3', '<=2.0.0', '1.x', '4.*', '^4.0.0 || ^5.0.0', 'workspace:*', '~~1.2.3']) {
+    assert.throws(() => satisfiesRange('1.2.3', bad), /不支持的版本区间形态/, '应当拒绝: ' + bad);
+  }
+});
+
+// —— 上游的发布专属 dist-tag（ADR 0002）——
+
+test('releaseDistTag 按上游实测命名：点全部换成连字符', () => {
+  assert.equal(releaseDistTag('0.2.1-alpha.1'), 'dsh-0-2-1-alpha-1');
+  assert.equal(releaseDistTag('0.2.0-rc.2'), 'dsh-0-2-0-rc-2');
+  assert.equal(releaseDistTag('0.1.7-alpha.2'), 'dsh-0-1-7-alpha-2');
+});
+
+test('chooseIndependentVersion 优先采纳发布专属 tag，压过区间解', () => {
+  const published = ['4.0.4', '4.0.5-alpha.1'];
+  assert.equal(chooseIndependentVersion(published, ['~4.0.4'], '4.0.5-alpha.1'), '4.0.5-alpha.1');
+  assert.equal(chooseIndependentVersion(published, ['~4.0.4'], undefined), '4.0.4');
+});
+
+test('发布 tag 指向一个 registry 上没有的版本时响亮失败，不退回区间解', () => {
+  // 静默退回会假装「一切正常」，而真实情况是上游打了 tag 却没发布那个版本——
+  // 或者我们的 packument 缓存滞后，两种都必须让人看见。
+  assert.throws(() => chooseIndependentVersion(['4.0.4'], ['~4.0.4'], '4.0.5-alpha.9'),
+    /registry 的已发布列表里没有它/);
+});
+
+test('resolveIndependentVersions 把 0.2.1-alpha.1 的 cordis 形状解成上游指定的版本', () => {
+  const publishedByPackage = new Map([['@deepseek-ai/cordis', ['4.0.1', '4.0.4', '4.0.5-alpha.1']]]);
+  const edges = new Map([['@deepseek-ai/cordis', [
+    { name: '@deepseek-ai/cordis', kind: 'dep', optional: false, range: '~4.0.5-alpha.1' },
+    // 闭包按 latestStable 的 manifest 收集边，于是混进了上一个稳定版的声明。
+    { name: '@deepseek-ai/cordis', kind: 'peer', optional: false, range: '~4.0.4' },
+  ]]]);
+  const distTagsByPackage = new Map([['@deepseek-ai/cordis', { latest: '4.0.4', 'dsh-0-2-1-alpha-1': '4.0.5-alpha.1' }]]);
+  const got = resolveIndependentVersions(publishedByPackage, edges, { tagVersion: '0.2.1-alpha.1', distTagsByPackage });
+  assert.equal(got.get('@deepseek-ai/cordis').version, '4.0.5-alpha.1');
+  assert.equal(got.get('@deepseek-ai/cordis').chosenBy, 'upstream-release-tag');
+});
+
+test('没有发布专属 tag 的独立线包仍按区间求解，并如实标出来源', () => {
+  const publishedByPackage = new Map([['@deepseek-ai/x', ['1.0.0', '1.1.0', '1.2.0']]]);
+  const edges = new Map([['@deepseek-ai/x', [
+    { name: '@deepseek-ai/x', kind: 'dep', optional: false, range: '^1.0.0' },
+  ]]]);
+  const got = resolveIndependentVersions(publishedByPackage, edges,
+    { tagVersion: '0.2.1-alpha.1', distTagsByPackage: new Map([['@deepseek-ai/x', { latest: '1.2.0' }]]) });
+  assert.equal(got.get('@deepseek-ai/x').version, '1.2.0');
+  assert.equal(got.get('@deepseek-ai/x').chosenBy, 'declared-ranges');
+});
+
+test('不传 tagVersion 时行为与 ADR 0001 时期完全一致（旧 fixture 不受影响）', () => {
+  const publishedByPackage = new Map([['@deepseek-ai/x', ['1.0.0', '1.1.0']]]);
+  const edges = new Map([['@deepseek-ai/x', [
+    { name: '@deepseek-ai/x', kind: 'dep', optional: false, range: '~1.0.0' },
+  ]]]);
+  const got = resolveIndependentVersions(publishedByPackage, edges);
+  assert.equal(got.get('@deepseek-ai/x').version, '1.0.0');
+  assert.equal(got.get('@deepseek-ai/x').chosenBy, 'declared-ranges');
+});
+
+// —— 闭包定点迭代（ADR 0001 的选版机制补的那一环）——
+// 这三条不依赖上游的 dsh-* tag：A 的价值正是「没有 tag 也应该对」。
+
+// 造一个上游形状：根包精确要 newplugin@2.0.0-alpha.1；而 newplugin 的旧稳定版 1.9.0
+// 声明 core ~1.0.0，它自己的 alpha 版声明 core ~1.1.0-alpha.1。
+// 只读 latestStable 的 manifest 会得到互斥的 core 约束；迭代到定点后不该再有 1.0.0 那一条。
+function makeRegistry(corePublished) {
+  const pkgs = {
+    '@deepseek-ai/dsh': {
+      '2.0.0-alpha.1': { dependencies: { '@deepseek-ai/core': '~1.1.0-alpha.1', '@deepseek-ai/newplugin': '2.0.0-alpha.1' } },
+    },
+    '@deepseek-ai/newplugin': {
+      '1.9.0': { dependencies: { '@deepseek-ai/core': '~1.0.0' } },
+      '2.0.0-alpha.1': { dependencies: { '@deepseek-ai/core': '~1.1.0-alpha.1' } },
+    },
+    '@deepseek-ai/core': {},
+  };
+  return async (name) => {
+    if (name === '@deepseek-ai/core') return { versions: Object.fromEntries(corePublished.map((v) => [v, {}])) };
+    const versions = {};
+    for (const [v, m] of Object.entries(pkgs[name] ?? {})) versions[v] = m;
+    return { versions };
+  };
+}
+
+test('闭包迭代到定点：过期 manifest 的区间不会留在约束集里（无 dist-tag 也成立）', async () => {
+  const { pinnable, publishedByPackage, edges, chosenVersions, rounds } =
+    await walkFamilyClosure('@deepseek-ai/dsh', '2.0.0-alpha.1', makeRegistry(['1.0.0', '1.0.9', '1.1.0-alpha.1', '1.1.0']));
+  assert.equal(pinnable.has('@deepseek-ai/newplugin'), true, 'newplugin 发了 tag 版本即同版本线');
+  const ranges = declaredRanges('@deepseek-ai/core', edges);
+  assert.deepEqual(ranges, ['~1.1.0-alpha.1'], '不应再混进 1.9.0 那份 manifest 的 ~1.0.0');
+  const independent = resolveIndependentVersions(publishedByPackage, edges, { tagVersion: '2.0.0-alpha.1' });
+  assert.equal(independent.get('@deepseek-ai/core').version, '1.1.0', '稳定版存在时仍取稳定版');
+  assert.ok(rounds >= 1, '至少跑过一轮');
+  void chosenVersions;
+});
+
+test('定点迭代会随选定版本换 manifest：只剩预发布可用时解出预发布', async () => {
+  const { edges, publishedByPackage } =
+    await walkFamilyClosure('@deepseek-ai/dsh', '2.0.0-alpha.1', makeRegistry(['1.0.0', '1.0.9', '1.1.0-alpha.1']));
+  const independent = resolveIndependentVersions(publishedByPackage, edges, { tagVersion: '2.0.0-alpha.1' });
+  assert.equal(independent.get('@deepseek-ai/core').version, '1.1.0-alpha.1');
+  assert.equal(independent.get('@deepseek-ai/core').chosenBy, 'declared-ranges', '没有 tag 时来源必须是区间');
+});
+
+test('区间互斥到无法收敛时响亮失败，而不是交一个半收敛的图给构建', async () => {
+  // core 只有 1.0.x：定点上 newplugin 的 alpha 声明要 1.1.0-alpha.1，永远解不出。
+  const { publishedByPackage, edges } =
+    await walkFamilyClosure('@deepseek-ai/dsh', '2.0.0-alpha.1', makeRegistry(['1.0.0', '1.0.9']));
+  assert.throws(
+    () => resolveIndependentVersions(publishedByPackage, edges, { tagVersion: '2.0.0-alpha.1' }),
+    /没有任何已发布版本能同时满足声明区间/,
+  );
+});
+
+test('闭包上限可注入：一轮就停时未收敛必须抛错，不许静默交出自相矛盾的图', async () => {
+  const fetch = makeRegistry(['1.0.0', '1.0.9', '1.1.0-alpha.1', '1.1.0']);
+  const limited = await walkFamilyClosure('@deepseek-ai/dsh', '2.0.0-alpha.1', fetch, { pool: 2, maxRounds: 1 })
+    .then(() => null)
+    .catch((error) => error);
+  assert.ok(limited instanceof Error, 'maxRounds=1 时第一轮还在扩图，应当判未收敛');
+  assert.match(limited.message, /未收敛/);
+  const full = await walkFamilyClosure('@deepseek-ai/dsh', '2.0.0-alpha.1', fetch, { pool: 2 });
+  assert.ok(full.rounds >= 2, '同一张图放开轮数后应至少两轮才稳定');
 });

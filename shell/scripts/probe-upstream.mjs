@@ -71,7 +71,8 @@ async function resolveTag() {
 const V = await resolveTag();
 console.log('探针目标 tag: ' + V);
 
-const { pinnable, publishedByPackage, edges } = await walkFamilyClosure(ROOT_PACKAGE, V, packument, { pool: POOL });
+const { pinnable, publishedByPackage, distTagsByPackage, edges, rounds } =
+  await walkFamilyClosure(ROOT_PACKAGE, V, packument, { pool: POOL });
 
 // 上游的 npm 家族分批发布，成员包可以比根包晚 20 分钟以上（实测 rc.1：12:34:03 → 12:54:22）。
 // 这种缺口等一轮就好，与「区间形态不认识 / 永远无解」不是一类问题，因此给出独立退出码 3，
@@ -99,16 +100,19 @@ if (waiting.length > 0) {
   // 断言处崩溃，把退出码变成 0xC0000409——调用方分支于退出码，崩溃会让判定失真。
   process.exitCode = 3;
 } else {
+  // 边已随闭包迭代到定点，所以这里的区间全部来自真正装配那份代码的声明。
   let independent;
   try {
-    independent = resolveIndependentVersions(publishedByPackage, edges);
+    independent = resolveIndependentVersions(publishedByPackage, edges, { tagVersion: V, distTagsByPackage });
   } catch (error) {
     console.error('::error::独立版本线选版失败：' + error.message);
     process.exitCode = 1;
   }
 
   if (independent !== undefined) {
-    console.log('同版本线 ' + pinnable.size + ' 个；独立版本线 ' + independent.size + ' 个');
+    const byTag = [...independent.values()].filter((i) => i.chosenBy === 'upstream-release-tag').length;
+    console.log('同版本线 ' + pinnable.size + ' 个；独立版本线 ' + independent.size + ' 个'
+      + '（其中 ' + byTag + ' 个照上游 dsh-* 发布 tag 定版、' + (independent.size - byTag) + ' 个按声明区间求解）');
 
     // 预警：声明区间已不再容纳 npm 最新稳定版。
     const diverged = [];
@@ -117,9 +121,14 @@ if (waiting.length > 0) {
       const admitsNewest = highestSatisfying([newest], info.ranges) !== undefined;
       console.log('  ' + name + ' -> ' + info.version
         + '  ranges=' + JSON.stringify(info.ranges)
+        + '  chosenBy=' + info.chosenBy
         + '  declared=' + info.declared
         + '  npm最新稳定版=' + newest + (admitsNewest ? '' : '（不被声明区间容纳）'));
-      if (!admitsNewest) diverged.push(name + '（声明 ' + info.ranges.join('、') + '，npm 最新 ' + newest + '）');
+      if (!admitsNewest) {
+        const why = info.chosenBy === 'upstream-release-tag'
+          ? '上游发布 tag 指定' : '声明 ' + info.ranges.join('、');
+        diverged.push(name + '（' + why + '，npm 最新稳定版 ' + newest + '）');
+      }
     }
 
     if (diverged.length > 0) {
