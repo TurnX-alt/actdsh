@@ -1,11 +1,12 @@
 # actdsh — DeepSeek Harness 桌面版（Windows 免安装）
 
-actdsh 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 dsh）的桌面分发仓库。它把官方发布版本组装成一个免安装的 Windows 应用：下载 zip、解压、双击，不需要安装 Node.js、npm 或任何其他开发环境。应用窗口内就是完整的 dsh 官方 Web 界面，配置、会话、技能、插件数据与官方版完全通用。本仓库的自动化流程每天检查一次上游新版本，产物始终与上游同版本。
+actdsh 是 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 dsh）的第三方桌面分发仓库：把官方 npm 包组装成一个免安装的 Windows 应用，下载 zip、解压、双击，不需要 Node.js、npm 或任何开发环境。它提供两件官方桌面版没有的东西——一个不写注册表、可放在任意目录的绿色包，以及一份记录「这一版实际锁定了哪些依赖、各是什么版本」的构建清单。窗口内就是完整的 dsh 官方 Web 界面，配置、会话、技能、插件数据与官方版完全通用。
 
 - 上游官方仓库：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
-- 本项目性质：第三方打包分发，非 deepseek-ai 官方产品（见文末声明）
+- 本项目性质：第三方打包分发，非 deepseek-ai 官方产品；dsh 的功能问题请反馈到上游（见文末声明）
+- macOS 请用官方版：上游自 2026-09-24 起发布带自动更新的桌面版，本仓库 2026-09-25 起不再产出 macOS 包（原因见[与官方桌面版的区别](#与官方桌面版的区别)）
 
-上游从 2026-09-24 起自己发布官方桌面版，Windows 与 macOS 都能直接从 DeepSeek 的 CDN 下载。macOS 请用官方版，本仓库不再产出 macOS 包（原因见[与官方桌面版的区别](#与官方桌面版的区别)）。两边读同一份 `~/.dsh` 数据，配置和会话互相通用，装了哪个都能接着用另一个的数据。
+两边读同一份 `~/.dsh` 数据，配置和会话互相通用，装了哪个都能接着用另一个的数据。
 
 ## 下载与安装
 
@@ -35,7 +36,7 @@ https://download.deepseek.com/dsh-desk/feeds/mac-arm64/nightly-mac.yml
 https://download.deepseek.com/dsh-desk/feeds/mac-x64/nightly-mac.yml
 ```
 
-2026-10-02 从这两份通道读到的是 `0.2.0-rc.2`：Apple 芯片包 374,053,565 字节，Intel 包 390,853,725 字节，两者 CDN 返回的 `Content-Length` 都与通道声明一致。想知道官方发到哪个版本，读通道比读版本号可靠。
+2026-10-03 复核，这两份通道仍是 `0.2.0-rc.2`：Apple 芯片包 374,053,565 字节，Intel 包 390,853,725 字节，两者 CDN 返回的 `Content-Length` 都与通道声明一致（自 2026-10-02 首次记录以来数值未变）。想知道官方发到哪个版本，读通道比读版本号可靠。
 
 两点要说清楚：
 
@@ -54,10 +55,13 @@ actdsh 不改 dsh 本体，它从 npm 上的官方 `@deepseek-ai/dsh` 取同版�
 | macOS 形态 | Apple 芯片与 Intel 都有 dmg 与 zip，各自一条更新通道 | 不提供 |
 | 自动更新 | 有，走 nightly 通道；Windows 支持差量更新 | 无，到 Releases 下载新版覆盖 |
 | 下载渠道 | `download.deepseek.com` CDN | GitHub Releases |
-| 版本 | 截至 2026-09-26 为 `0.1.7-rc.2`，滚动预发布线 | 与上游同版本号，每日轮询上游 tag 后跟进 |
-| 构建版本清单 | 未提供 | 每次发布附 `upstream-versions-windows-x64.json`，列出这一版实际锁定的全部 dsh 家族包版本（同版本线 270 余个 + 独立版本线若干个） |
+| 版本 | 滚动预发布线；2026-10-02 三个通道都是 `0.2.0-rc.2` | 与上游同版本号，每日轮询上游 tag 后跟进 |
+| 构建版本清单 | 未提供 | 每次发布附 `upstream-versions-windows-x64.json`，列出这一版实际锁定的全部 dsh 家族包版本（最近一次发布 `dsh-v0.2.0-rc.2`：同版本线 278 个 + 独立版本线 9 个） |
+| 官方产物的第三方核对 | 通道自己声明 sha512 与字节数，无人核对 | 每次发布前把官方通道的声明与真实下载字节对齐；不一致则不发布 |
 
-自动更新和 macOS 免手动放行只有官方版做得到，所以 macOS 用户应当直接用官方版。actdsh 剩下的是两件官方没有的东西：一个不写注册表、可以放在任意目录的 Windows 绿色包，以及一份说明「这个安装包实际装了哪些依赖、各是什么版本」的构建清单。
+清单不是模型推算：CI 会拿真实 `npm install` 生成的安装树与之对账，同版本线与独立线的**包集合**必须一致；唯一已知的版本差异（某包在 registry 上的实际最新与模型选定的不同）被写成一条固定断言而不是被忽略——它变了就会红。官方通道的 sha512 复核同样落在发布路径上：上游 `dsh-v*` 的 GitHub Release 里 assets 是 0 个，分发只走那条 CDN，所以在 actdsh 之前没有任何第三方核对过「通道声明的 sha512 == CDN 上的真实字节」。
+
+自动更新和 macOS 免手动放行只有官方版做得到，所以 macOS 用户应当直接用官方版。actdsh 剩下的是上面那两行官方没有的东西。
 
 ## 常见问题
 
@@ -83,7 +87,17 @@ dsh 默认使用 3080 端口。actdsh 启动时会自动检测：3080 被占用�
 
 ### 如何更新到新版本？
 
-actdsh 的版本号与上游完全一致（例如上游发布 `dsh-v0.1.0-rc.8`，本仓库即发布同名版本）。上游发布新版本后，本仓库通常 1 天内自动跟进。到 Releases 页面下载新版覆盖即可，数据不受影响。应用内暂无自动更新。
+actdsh 的版本号与上游完全一致（例如上游发布 `dsh-v0.1.0-rc.8`，本仓库即发布同名版本）。上游发布后本仓库通常在 1–2 天内跟进：定时任务实测可能延迟数小时，上游 npm 家族又是分批发布的，闭包没发齐时流水线会空转等下一轮而不是硬启动。到 Releases 页面下载新版覆盖即可，数据不受影响。应用内暂无自动更新。
+
+### 怎么判断我下载的包没有被改过？
+
+三层可核对的东西，都不需要信任维护者本人：
+
+1. 每次发布附 `upstream-versions-windows-x64.json`，列出这一版实际锁定的每个 dsh 家族包及其精确版本；
+2. 构建与验证全部在 GitHub Actions 的公开日志里，workflow 文件开源可审，任何人可复跑同一套脚本；
+3. 发布前会下载官方 CDN 上的真实安装包并计算 sha512，与官方更新通道声明的值对齐，不一致就不发布。
+
+要说明的是：这不等于「可复现构建」的证明。字节级可复现需要固定工具链与构建环境的逐位一致，本仓库只保证依赖版本被钉死、产物被真实启动验证过、官方产物被第三方核对过。
 
 ### 为什么安装包没有做代码签名？
 
@@ -94,26 +108,36 @@ actdsh 的版本号与上游完全一致（例如上游发布 `dsh-v0.1.0-rc.8`�
 ```
 每日 03:23 UTC 定时轮询
   → 对比「上游最新 dsh-v* 标签」与「本仓库已发布标签」（几秒即退，不消耗构建资源）
+  → 预检上游 npm 家族是否已把这一版发齐；没发齐就本轮空转，等下一轮而不是硬启动构建
   → 发现新版本才启动构建，只有一台 Windows runner
-  → 从 npm 安装官方 @deepseek-ai/dsh 对应版本，把同版本线的 @deepseek-ai/* 全部钉到 tag 精确版本，组装 Electron 壳
+  → 从 npm 安装官方 @deepseek-ai/dsh 对应版本：同版本线的 @deepseek-ai/* 全部钉到 tag 精确版本，
+    按自己节奏发版的独立线包则跟随上游对本次发布的指定（区间与发布 tag 迭代到定点），组装 Electron 壳
   → 用户视角自动化验证：真实启动安装包 → 等待 dsh 就绪 → 访问 Web 界面 → 校验 pnpm 垫片可用
-  → 验证通过才创建 Release
+  → 复核官方桌面版产物：下载 CDN 上的真实包算 sha512，与通道声明对齐；不一致就不发布
+  → 全部通过才创建 Release
 ```
 
-每次发布前，安装包都会在干净的 runner 上被真实启动并通过上述验证。验证不过，版本不会发布。
+每次发布前，安装包都会在干净的 runner 上被真实启动并通过上述验证。验证不过，版本不会发布。判定逻辑由仓库内的离线测试守着（2026-10-03 为 156 条，`node --test`，零依赖），其中包含与真实 `npm install` 安装树的对账和若干负控制——比如故意抹掉一个成员包版本，钉死必须响亮失败并点名，而不是悄悄降级把包发出去。
 
-另有两条每日探针，都与发布路径解耦、失败不阻塞发布：一条打 npm registry，预检版本线钉死会不会因为上游发版而失败；一条读官方桌面版的更新通道，核对它声明的产物是否真能取回、字节数是否与声明一致。
+另有两条每日探针，与发布路径解耦、失败不阻塞发布：一条打 npm registry，预检版本线钉死会不会因为上游发版而失败；一条读官方桌面版的更新通道，核对它声明的产物是否真能取回、字节数是否与声明一致。探针的异常与「通道内容变了」会推送给维护者——后者探针自己是绿的，红绿信号里没有这个信息，只有跨轮快照比对能发现。
+
+时间预期要说实话：GitHub 的定时任务实测可能延迟数小时，上游的 npm 家族又是分批发布（成员包可比根包晚 20 到 80 分钟，2026-09-23 事故里 26 小时内连发三版）。所以上游发布新版本后，actdsh 通常在 1–2 天内跟进，而不是几小时内。另外要说清边界：闭包没发齐、或选版判定不过时，流水线会停在那一个版本上等下一轮，而不是带着可疑的依赖图发出去——延迟是可观察的，勉强发布不是。
 
 图标与 dsh Web 界面同源（取自上游 favicon）。整个流程只使用 GitHub Actions 与 GitHub Releases，不依赖任何外部服务。
 
 ## English Summary
 
-actdsh distributes a ready-to-use, installer-free Windows build of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh). No Node.js, npm or any other toolchain is required: the zip bundles the runtime, the official web UI, and pnpm for plugin management, and it reads and writes the same `~/.dsh` directory as the official CLI. Upstream has shipped its own desktop app since 2026-09-24 — a per-user NSIS installer for Windows and dmg/zip builds for Apple Silicon and Intel Mac (the upstream pipeline carries code-signing and notarization steps; individual releases' notarization tickets are not verified here), all served from `download.deepseek.com` with electron-updater and differential updates on Windows. macOS therefore comes from upstream, not from actdsh; as of `0.2.0-rc.2` the official feed also ships Intel Mac builds, so no gap remains on that axis. What actdsh still adds is a portable Windows zip that writes nothing to the registry, plus a per-release dependency manifest recording the exact version pinned for every dsh family package. A daily workflow polls upstream tags, builds only when there is a new one, launches the package on a clean runner to verify it end to end, and publishes the result. Third-party packaging, not an official deepseek-ai product.
+actdsh is a third-party distribution of [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (dsh) for Windows: an installer-free zip that bundles the runtime, the official web UI and pnpm for plugins, requiring no Node.js or npm, and reading/writing the same `~/.dsh` directory as the official CLI. Upstream has shipped its own desktop app since 2026-09-24 — a per-user NSIS installer for Windows plus dmg/zip builds for Apple Silicon and Intel Mac, all served from `download.deepseek.com` with electron-updater (the upstream pipeline contains code-signing and notarization steps; individual releases' notarization tickets are not verified here). macOS therefore comes from upstream: actdsh stopped building macOS packages on 2026-09-25.
+
+What actdsh still adds are two things upstream does not publish. Every release carries `upstream-versions-windows-x64.json`, pinning each dsh family package to an exact version (the latest shipped release, `dsh-v0.2.0-rc.2`, records 278 same-line + 9 independent-line packages), and that model is reconciled in CI against a real `npm install` tree rather than trusted. Before actdsh, nobody independently checked the official channel: upstream `dsh-v*` GitHub Releases expose zero assets, so no third party had verified that the sha512 declared by the update channel matches the bytes actually served by the CDN. actdsh now downloads the official artifact, hashes it and refuses to publish on a mismatch.
+
+A daily workflow polls upstream, spins without building while the npm family is still being published, builds on a single Windows runner, launches the package on a clean runner to verify it end to end, and only then publishes. Expect 1–2 days after an upstream release rather than hours: GitHub scheduled runs can lag several hours, and upstream publishes the family in batches. Third-party packaging, not an official deepseek-ai product.
+
 
 ## 许可与声明
 
-- 本仓库的打包脚本与壳代码：MIT。
+- 本仓库的打包脚本与壳代码：[MIT](./LICENSE)。
 - dsh 本体：© deepseek-ai，[MIT](https://github.com/deepseek-ai/deepseek-harness/blob/master/LICENSE)。
 - actdsh 与 deepseek-ai 无隶属关系，仅为社区分发；dsh 的功能问题请反馈至[上游仓库](https://github.com/deepseek-ai/deepseek-harness/issues)。
 
-最近更新：2026-10-02
+最近更新：2026-10-03
