@@ -36,6 +36,9 @@ const TAG = '0.1.7-alpha.2';
 const GRAPHS = {
   alpha2: { file: 'pin-0.1.7-alpha.2.json', tag: '0.1.7-alpha.2' },
   rc2: { file: 'pin-0.2.0-rc.2.json', tag: '0.2.0-rc.2' },
+  // 2026-10-03 上游首次让独立线包进入预发布形态（cordis ~4.0.5-alpha.1），
+  // 也是第一次带 dsh-* 发布专属 dist-tag。离线回放必须有这一份，否则 ADR 0002 只在实时 registry 上被测到。
+  alpha21: { file: 'pin-0.2.1-alpha.1.json', tag: '0.2.1-alpha.1' },
 };
 
 function loadFixture(entry) {
@@ -54,7 +57,9 @@ function toPackument(fixture, tag, nopublish, name) {
     if (name === nopublish && v === tag) continue;
     versions[v] = pkg.manifests[v] ?? {};
   }
-  return { name, versions };
+  // 老 fixture 没有 distTags 字段——此时不放 dist-tags，选版自然退回区间求解，
+  // 于是新增的 ADR 0002 路径不会悄悄改写历史基线的结论。
+  return pkg.distTags === undefined ? { name, versions } : { name, versions, 'dist-tags': pkg.distTags };
 }
 
 const tempDirs = [];
@@ -373,4 +378,29 @@ describe('pin-upstream.mjs 离线回放（0.2.0-rc.2 图：当前形态与发布
     const { registry } = await runPin('rc2');
     assert.ok(registry.hits > 250, '本地 stub 应被大量命中，实际 ' + registry.hits);
   });
+});
+
+// —— ADR 0002：独立线包进入预发布形态时，模型必须与真实 npm 安装一致 ——
+// 这一条是本次修复的落点。修好之前模型直接判「永远无解」（cordis 约束集里混着
+// 4.0.4 时代的声明），而真实安装把 cordis 装成 4.0.5-alpha.1。
+test('0.2.1-alpha.1 回放与真实 npm 安装树一致：独立线取上游 dsh-* tag 指向的预发布版', async () => {
+  const npmTree = JSON.parse(readFileSync(join(HERE, 'fixtures', 'tree-0.2.1-alpha.1-npm.json'), 'utf8'));
+  const { status, dir, out } = await runPin('alpha21');
+  assert.equal(status, 0, '回放应通过，失败输出：' + out);
+  const model = JSON.parse(readFileSync(join(dir, 'upstream-versions.json'), 'utf8'));
+
+  assert.deepEqual(Object.keys(model.pinned).sort(), Object.keys(npmTree.pinned).sort(),
+    '同版本线包集合必须与真实安装一致');
+  // 真实树里 libreoffice-kit-win32-x64 是可选平台二进制，闭包不经它可达——
+  // 这是模型与 npm 的已知、可解释差异，不是漂移。
+  const treeIndependent = Object.fromEntries(
+    Object.entries(npmTree.independent).filter(([n]) => n !== '@deepseek-ai/libreoffice-kit-win32-x64'));
+  assert.deepEqual(Object.keys(model.independent).sort(), Object.keys(treeIndependent).sort(),
+    '独立版本线包集合必须与真实安装一致（可选平台二进制除外）');
+  const drift = Object.entries(treeIndependent)
+    .filter(([name, version]) => model.independent[name] !== version)
+    .map(([name, version]) => name + '（真实 ' + version + '，模型 ' + model.independent[name] + '）');
+  assert.deepEqual(drift, [], '独立线的选定版本必须逐个等于真实安装值——这一次不许有漂移');
+  assert.equal(model.independent['@deepseek-ai/cordis'], '4.0.5-alpha.1');
+  assert.equal(model.independent['@deepseek-ai/schemastery'], '3.18.5-alpha.1');
 });

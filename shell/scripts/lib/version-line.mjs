@@ -68,9 +68,15 @@ export function latestStable(versions) {
 
 // ---- 版本区间 ----
 
-// 只支持上游实际用到的三种形态：精确版、~X.Y.Z、^X.Y.Z。
-// 遇到其他形态（>=、||、workspace: 等）响亮失败，不猜测语义——
+// 只支持上游实际用到的形态：精确版，以及 `~` / `^` 后跟「主[.次[.补丁]][-预发布]」。
+// 遇到其他形态（>=、||、workspace:、4.x 等）响亮失败，不猜测语义——
 // 猜错会让纯度闸门静默放过一个错误的版本。
+//
+// 2026-10-03 上游第一次用带预发布后缀的区间：`@deepseek-ai/dsh@0.2.1-alpha.1` 声明
+// `cordis: ~4.0.5-alpha.1` 与 `schemastery: ~3.18.5-alpha.1`。原实现只认整数三段，
+// 探针于是报「不支持的形态」（人工排查级别），而真实情况是新 tag 正常在架。
+const TILDE_CARET_RE = /^([~^])(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?$/;
+
 export function satisfiesRange(version, range) {
   const r = String(range).trim();
   if (r === '' || r === '*' || r === 'latest') return true;
@@ -78,20 +84,41 @@ export function satisfiesRange(version, range) {
 
   if (VERSION_RE.test(r)) return compareVersions(version, r) === 0;
 
-  const m = /^([~^])(\d+)\.(\d+)\.(\d+)$/.exec(r);
+  const m = TILDE_CARET_RE.exec(r);
   if (m === null) {
-    throw new Error('不支持的版本区间形态: ' + range + '（已支持：精确版、~X.Y.Z、^X.Y.Z）');
+    throw new Error('不支持的版本区间形态: ' + range
+      + '（已支持：精确版、~X[.Y[.Z]][-预发布]、^X[.Y[.Z]][-预发布]）');
   }
   const major = Number(m[2]);
-  const minor = Number(m[3]);
-  const patch = Number(m[4]);
-  const lower = major + '.' + minor + '.' + patch;
+  const hasMinor = m[3] !== undefined;
+  const minor = hasMinor ? Number(m[3]) : 0;
+  const hasPatch = m[4] !== undefined;
+  const patch = hasPatch ? Number(m[4]) : 0;
+  const pre = m[5] === undefined ? '' : '-' + m[5];
+  const lower = major + '.' + minor + '.' + patch + pre;
+  const lowerTuple = major + '.' + minor + '.' + patch;
   let upper;
-  if (m[1] === '~') upper = major + '.' + (minor + 1) + '.0';
-  else if (major > 0) upper = (major + 1) + '.0.0';
-  else if (minor > 0) upper = '0.' + (minor + 1) + '.0';
-  else upper = '0.0.' + (patch + 1);
-  return compareVersions(version, lower) >= 0 && compareVersions(version, upper) < 0;
+  if (m[1] === '~') {
+    // ~ 只锁到「最后一个给定的数字」：~4 → <5.0.0；~4.0 与 ~4.0.5 → <4.1.0
+    upper = hasMinor ? major + '.' + (minor + 1) + '.0' : (major + 1) + '.0.0';
+  } else if (major > 0) {
+    upper = (major + 1) + '.0.0';
+  } else if (!hasMinor) {
+    upper = '1.0.0';                                  // ^0 → <1.0.0
+  } else if (!hasPatch) {
+    upper = '0.' + (minor + 1) + '.0';                // ^0.0 → <0.1.0，不因为没给补丁就锁成 0.0.z
+  } else if (minor > 0) {
+    upper = '0.' + (minor + 1) + '.0';
+  } else {
+    upper = '0.0.' + (patch + 1);
+  }
+  if (compareVersions(version, lower) < 0 || compareVersions(version, upper) >= 0) return false;
+  // node-semver 的预发布规则：默认不接受预发布候选，除非区间自身在同一个
+  // [主,次,补丁] 三元组上带预发布下界。4.0.5-alpha.1 满足 ~4.0.5-alpha.1，
+  // 但 4.0.6-alpha.1 不满足——区间没有把候选面放开到那个三元组。
+  const parsed = parseVersion(version);
+  if (parsed.pre === '') return true;
+  return pre !== '' && parsed.nums.join('.') === lowerTuple;
 }
 
 // 取会真正进入安装树的声明：dep 边，以及非 optional 的 peer 边。
@@ -112,9 +139,30 @@ export function highestSatisfying(publishedVersions, ranges) {
   return ok.length === 0 ? undefined : latestStable(ok);
 }
 
+/**
+ * 上游给「某次 dsh 发布专用的」独立版本线包打的 dist-tag 名。
+ * 实测 2026-10-03：`dsh-v0.2.1-alpha.1` 这次发布，cordis / schemastery / cosmokit 以及四个
+ * cordis-plugin-* 都带 `dsh-0-2-1-alpha-1` 指向本次要用的版本，而它们的 `latest` 全部还停在
+ * 上一次的稳定版。命名规则是 `dsh-` + 版本号里所有点换成连字符。
+ */
+export function releaseDistTag(tagVersion) {
+  return 'dsh-' + String(tagVersion).replace(/\./g, '-');
+}
+
 // 无声明可依（只经 optional peer 可达）时退回最新稳定版；
 // 有声明却无版本可满足时返回 undefined，由调用方响亮失败。
-export function chooseIndependentVersion(publishedVersions, ranges) {
+//
+// releaseTagged 是上游 `dsh-<版本>` 专属 dist-tag 指向的版本，存在即优先采纳：
+// 那是发布方对「这一版该用哪个」的直接回答。为什么不能只靠区间——见 resolveIndependentVersions
+// 的注释，闭包收集边时读的是 latestStable 的 manifest，独立线进入预发布形态后那个猜测会失准。
+export function chooseIndependentVersion(publishedVersions, ranges, releaseTagged) {
+  if (releaseTagged !== undefined && releaseTagged !== null) {
+    if (!publishedVersions.includes(releaseTagged)) {
+      throw new Error('上游发布 tag 指向 ' + releaseTagged + '，但 registry 的已发布列表里没有它：'
+        + publishedVersions.slice(-4).join(', ') + '（可能是 registry 缓存滞后，等一轮再判）');
+    }
+    return releaseTagged;
+  }
   if (ranges.length === 0) return latestStable(publishedVersions);
   return highestSatisfying(publishedVersions, ranges);
 }
@@ -130,16 +178,23 @@ export function isPeerOnly(name, edges) {
 
 // 判定单个家族包属于同版本线还是独立版本线，并带回已发布版本列表，
 // 供 BFS 结束后按声明区间选版（选版依赖完整的边信息，不能在 BFS 途中定）。
-export function classifyPackage(packument, tagVersion) {
+//
+// releaseTagged 是上游 `dsh-<版本>` 专属 dist-tag 指向的版本。它存在时**读它的 manifest**，
+// 而不是 latestStable 的：独立线包进入预发布形态后，稳定版那份声明描述的是上一次发布
+// （cordis-plugin-timer@1.1.6 说 cordis `~4.0.4`，而 1.1.7-alpha.1 说 `~4.0.5-alpha.1`）。
+// 用哪一版装配，就该收哪一版的边——否则闭包会把两个不会同时存在的版本的声明混成一组约束，
+// 选版与闸门各自红一次。
+export function classifyPackage(packument, tagVersion, releaseTagged) {
   const versions = packument?.versions ?? {};
   const published = Object.keys(versions);
   if (versions[tagVersion]) {
     return { kind: 'pinnable', version: tagVersion, manifest: versions[tagVersion], published };
   }
+  const chosen = versions[releaseTagged] !== undefined ? releaseTagged : latestStable(published);
   return {
     kind: 'independent',
-    version: latestStable(published),
-    manifest: versions[latestStable(published)],
+    version: chosen,
+    manifest: versions[chosen],
     published,
   };
 }
@@ -160,18 +215,31 @@ export function familyEdges(manifest) {
   return out;
 }
 
-// BFS 结束后统一选版：独立版本线跟随依赖方声明（ADR 0001），
-// 只有 peer 补齐包需要由本仓库写进 dependencies。
-export function resolveIndependentVersions(publishedByPackage, edges) {
+// BFS 结束后统一选版：优先采纳上游的 `dsh-<版本>` 发布专属 dist-tag（ADR 0002），
+// 没有该 tag 才退回「跟随依赖方声明区间」（ADR 0001）；peer 补齐包由本仓库写进 dependencies。
+//
+// 为什么区间求解不足以独立支撑选版：闭包收集边时，独立线包读的是 `latestStable` 那份
+// manifest 的声明（见 classifyPackage），而最终解出的可能是另一个版本——那个版本自己的
+// 声明从来没被读进来。稳定版与预发布版并存的上游会因此把两个版本的声明混成一组约束。
+export function resolveIndependentVersions(publishedByPackage, edges, options = {}) {
+  const { tagVersion, distTagsByPackage } = options;
   const out = new Map();
+  const wanted = tagVersion === undefined ? undefined : releaseDistTag(tagVersion);
   for (const [name, published] of publishedByPackage) {
     const ranges = declaredRanges(name, edges);
-    const version = chooseIndependentVersion(published, ranges);
+    const tagged = wanted === undefined ? undefined : distTagsByPackage?.get(name)?.[wanted];
+    const version = chooseIndependentVersion(published, ranges, tagged);
     if (version === undefined) {
       throw new Error('独立版本线包 ' + name + ' 没有任何已发布版本能同时满足声明区间 '
         + JSON.stringify(ranges) + '；已发布: ' + published.join(', '));
     }
-    out.set(name, { version, ranges, declared: isPeerOnly(name, edges) });
+    out.set(name, {
+      version,
+      ranges,
+      declared: isPeerOnly(name, edges),
+      chosenBy: tagged !== undefined ? 'upstream-release-tag'
+        : ranges.length === 0 ? 'no-declaration' : 'declared-ranges',
+    });
   }
   return out;
 }
@@ -221,49 +289,145 @@ export function newestReplayBaseline(filenames, tagVersion) {
 
 // ---- 家族闭包遍历 ----
 
-// 从主包出发做家族闭包 BFS（dependencies + peerDependencies 双通道，池化拉取）。
-// fetchPackument 由调用方注入，因此同一套遍历既能跑实时 registry、也能跑录制 fixture；
-// onVisit 供录制器拿到原始元数据做投影。
-// 选版不在这里做：独立版本线的版本由依赖方声明的区间决定，而区间要等全部边收集完才完整。
+// 定点迭代的上限。真实收敛用了 2–3 轮（seed→插件换版→cordis 换版→稳定），留余量。
+const MAX_CLOSED_ROUNDS = 6;
+
+/**
+ * 从主包出发做家族闭包遍历（dependencies + peerDependencies 双通道，池化拉取），
+ * 并把「读哪个版本的声明」迭代到定点。
+ *
+ * 为什么必须定点：独立版本线包的版本要等全部边收集完才解得出，而边本身取决于每个包
+ * 当前被读的是哪份 manifest。用 `latestStable` 一次性猜（ADR 0001 的最初实现）在独立线
+ * 进入预发布形态后会猜错：插件的 1.1.6 那份 manifest 描述的是上一次发布的约束，于是闭包里
+ * 同时出现 `~4.0.5-alpha.1` 与 `~4.0.4`，模型判「永远无解」，而 npm 递归解析装得很好。
+ * 每轮用上一轮解出的版本重收边，边就总是来自真正装配那份代码的声明——和 npm 同一个不动点。
+ *
+ * 上游的 `dsh-<版本>` 发布专属 dist-tag（ADR 0002）作为 seed 与优先来源参与：它不参与推算的
+ * 部分是「发布方指定」这个事实，定点迭代负责让其余包与之一致。
+ *
+ * fetchPackument 由调用方注入，因此同一套遍历既能跑实时 registry、也能跑录制 fixture；
+ * onVisit 供录制器拿到原始元数据做投影。
+ */
 export async function walkFamilyClosure(rootPackage, tagVersion, fetchPackument, options = {}) {
-  const { pool = 12, onVisit } = options;
-  const pinnable = new Set([rootPackage]);
+  const { pool = 12, onVisit, maxRounds = MAX_CLOSED_ROUNDS } = options;
+  const wanted = releaseDistTag(tagVersion);
+  const metas = new Map();
+  const pinnable = new Set();
   const publishedByPackage = new Map();
-  const edges = new Map();
-  const queue = [rootPackage];
-  while (queue.length > 0) {
-    const chunk = queue.splice(0, pool);
-    const metas = await Promise.all(chunk.map(async (name) => {
-      try { return await fetchPackument(name); } catch { return null; }
-    }));
-    for (let i = 0; i < chunk.length; i += 1) {
-      const name = chunk[i];
-      const meta = metas[i];
-      if (meta === null) throw new Error('packument 三次重试仍失败: ' + name);
-      onVisit?.(name, meta);
-      const classified = classifyPackage(meta, tagVersion);
-      if (classified.kind === 'pinnable') {
-        pinnable.add(name);
-      } else {
-        pinnable.delete(name);
-        // 家族包在 registry 上一个可用版本都没有（被撤包或废弃）。此时必须响亮失败：
-        // 静默跳过会让安装包缺一个运行时核心包，而纯度闸门的意义正是不放过这种情况。
-        if (classified.published.length === 0) {
-          throw new Error('家族包 ' + name + ' 在 registry 上没有任何可用版本，无法钉死版本线');
-        }
-        publishedByPackage.set(name, classified.published);
-      }
-      for (const edge of familyEdges(classified.manifest)) {
-        let list = edges.get(edge.name);
-        if (list === undefined) edges.set(edge.name, list = []);
-        list.push(edge);
-        if (!pinnable.has(edge.name) && !publishedByPackage.has(edge.name) && !queue.includes(edge.name)) {
-          queue.push(edge.name);
-        }
-      }
+  const distTagsByPackage = new Map();
+  /** name -> 本轮读取 manifest 所用的版本（同版本线包恒为 tagVersion）。 */
+  const chosen = new Map();
+  /** name -> 迭代过程中真的被读过 manifest 的版本集合，供录制器如实投影 fixture。 */
+  const readVersions = new Map();
+
+  function register(name, meta) {
+    if (meta === null) throw new Error('packument 三次重试仍失败: ' + name);
+    metas.set(name, meta);
+    onVisit?.(name, meta);
+    // 没有 dist-tags 的包存空对象，查表时不必区分「没取到」。
+    const distTags = meta['dist-tags'] ?? {};
+    distTagsByPackage.set(name, distTags);
+    const versions = meta.versions ?? {};
+    const published = Object.keys(versions);
+    // 家族包在 registry 上一个可用版本都没有（被撤包或废弃）。此时必须响亮失败：
+    // 静默跳过会让安装包缺一个运行时核心包，而纯度闸门的意义正是不放过这种情况。
+    if (published.length === 0) {
+      throw new Error('家族包 ' + name + ' 在 registry 上没有任何可用版本，无法钉死版本线');
+    }
+    const tagged = distTags[wanted];
+    const classified = classifyPackage(meta, tagVersion,
+      published.includes(tagged) ? tagged : undefined);
+    if (classified.kind === 'pinnable') {
+      pinnable.add(name);
+      chosen.set(name, tagVersion);
+    } else {
+      // 主包在 npm 上无此 tag 版本 = 上游该 release 未发布 npm 包（如 alpha 线只发 GitHub）。
+      // 这里不抛错，交给调用方按「主包不在 pinnable 里」判——它是一类清晰的跳过，不是故障。
+      pinnable.delete(name);
+      publishedByPackage.set(name, classified.published);
+      chosen.set(name, classified.version);
     }
   }
-  return { pinnable, publishedByPackage, edges };
+
+  async function fetchBatch(names) {
+    for (let i = 0; i < names.length; i += pool) {
+      const chunk = names.slice(i, i + pool);
+      const got = await Promise.all(chunk.map(async (name) => {
+        try { return await fetchPackument(name); } catch { return null; }
+      }));
+      for (let j = 0; j < chunk.length; j += 1) register(chunk[j], got[j]);
+    }
+  }
+
+  // 用当前 chosen 指向的 manifest 重收全部边；顺带记下还没拉过的名字。
+  function collectEdges() {
+    const next = new Map();
+    const unseen = [];
+    for (const [name, meta] of metas) {
+      const version = chosen.get(name);
+      if (!readVersions.has(name)) readVersions.set(name, new Set());
+      readVersions.get(name).add(version);
+      for (const edge of familyEdges(meta.versions?.[version])) {
+        let list = next.get(edge.name);
+        if (list === undefined) next.set(edge.name, list = []);
+        list.push(edge);
+        if (!metas.has(edge.name) && !unseen.includes(edge.name)) unseen.push(edge.name);
+      }
+    }
+    return { edges: next, unseen };
+  }
+
+  // 一轮求解。中间轮允许某个包暂时解不出（它的边还没被上游新版本的声明刷新），
+  // 那种情况保持原 seed 不动；最后一轮由 resolveIndependentVersions 负责响亮失败。
+  function pickRound(edges) {
+    const picks = new Map();
+    for (const [name, published] of publishedByPackage) {
+      const ranges = declaredRanges(name, edges);
+      const tagged = distTagsByPackage.get(name)?.[wanted];
+      let version;
+      try {
+        version = chooseIndependentVersion(published, ranges, published.includes(tagged) ? tagged : undefined);
+      } catch {
+        continue;
+      }
+      if (version !== undefined) picks.set(name, version);
+    }
+    return picks;
+  }
+
+  await fetchBatch([rootPackage]);
+  let edges = new Map();
+  let rounds = 0;
+  const history = new Set();
+  let converged = false;
+  while (rounds < maxRounds) {
+    rounds += 1;
+    const collected = collectEdges();
+    edges = collected.edges;
+    if (collected.unseen.length > 0) await fetchBatch(collected.unseen);
+    let moved = false;
+    for (const [name, version] of pickRound(edges)) {
+      if (chosen.get(name) !== version) { chosen.set(name, version); moved = true; }
+    }
+    if (!moved && collected.unseen.length === 0) { converged = true; break; }
+    const signature = [...chosen.entries()].sort().map(([n, v]) => n + '@' + v).join('|');
+    if (history.has(signature)) {
+      throw new Error('独立版本线选版震荡：第 ' + rounds + ' 轮回到了已出现过的状态，无法收敛。'
+        + '涉及: ' + [...publishedByPackage.keys()].join(', '));
+    }
+    history.add(signature);
+  }
+  if (!converged) {
+    throw new Error('独立版本线选版在 ' + maxRounds + ' 轮内未收敛，把 maxRounds 提上去之前先确认上游声明没有互斥');
+  }
+
+  // 收敛态的权威选版由调用方解（resolveIndependentVersions）：闭包只负责把「读哪份 manifest」
+  // 推到定点。把严格求解搬进来会抢在探针「上游还没发齐」的分类之前抛错，
+  // 于是发布窗口里的一次正常等待被报成退出码 1。
+  return {
+    pinnable, publishedByPackage, distTagsByPackage, edges, chosenVersions: chosen, rounds,
+    manifestVersionsRead: new Map([...readVersions].map(([n, set]) => [n, [...set]])),
+  };
 }
 
 // ---- peer 补齐 ----

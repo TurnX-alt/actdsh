@@ -1,9 +1,12 @@
 // 录制 pin-upstream.mjs 回放所需的 registry fixture。
 //
-// 为什么是投影而不是原始 packument：脚本对每个包只读三样东西——versions 的键列表、
+// 为什么是投影而不是原始 packument：脚本对每个包只读四样东西——versions 的键列表、
 // versions[tagVersion]（同版本线包用）、versions[latestStable]（独立版本线包在 BFS
-// 途中扩展依赖边用）。只存这三样，276 个包的 fixture 才小到可以入库；存原始
-// abbreviated packument 会把 dist、engines、全部历史版本的依赖都带进来。
+// 途中扩展依赖边用）、dist-tags（选版时读上游的 dsh-* 发布专属 tag，ADR 0002）、
+// 以及定点迭代收敛后真正读过的那些版本的 manifest（ADR 0001 的迭代路径；缺了它，回放会
+// 拿到空 manifest 而「离线可证」变成假的确定）。
+// 只存这四样，280 个包的 fixture 才小到可以入库；存原始 abbreviated packument 会把
+// dist、engines、全部历史版本的依赖都带进来。
 //
 // 用法: node shell/scripts/lib/record-pin-fixture.mjs <tag-version> <out.json>
 //       [registry-base-url]
@@ -45,11 +48,12 @@ async function packument(name) {
   throw lastError ?? new Error('packument failed for ' + name);
 }
 
-// 只保留脚本会读到的字段。
-function project(name, meta) {
+// 只保留脚本会读到的字段。keep 是闭包定点迭代真正读过的版本集合——
+// 少了它，回放会拿到空 manifest，于是「离线可证」变成假的确定。
+function project(name, meta, keep) {
   const versions = meta?.versions ?? {};
   const keys = Object.keys(versions);
-  const wanted = new Set([tagVersion, latestStable(keys)].filter((v) => v !== undefined));
+  const wanted = new Set([tagVersion, latestStable(keys), ...(keep ?? [])].filter((v) => v !== undefined));
   const manifests = {};
   for (const v of wanted) {
     const m = versions[v];
@@ -60,14 +64,20 @@ function project(name, meta) {
       ...(m.peerDependenciesMeta === undefined ? {} : { peerDependenciesMeta: m.peerDependenciesMeta }),
     };
   }
-  return { name, versions: keys, manifests };
+  return { name, versions: keys, manifests, distTags: meta?.['dist-tags'] ?? {} };
 }
 
+// 先攒原始元数据：投影要等闭包收敛完才知道读过哪些版本，onVisit 时机太早。
+const raw = new Map();
+const { pinnable, publishedByPackage, manifestVersionsRead } = await walkFamilyClosure(
+  ROOT_PACKAGE, tagVersion, packument,
+  { pool: POOL, onVisit: (name, meta) => { if (!raw.has(name)) raw.set(name, meta); } });
+// 投影集 = 闭包迭代中真读过的版本。多存是浪费体积，少存会让回放拿到空 manifest 而假绿。
 const captured = new Map();
-const { pinnable, publishedByPackage } = await walkFamilyClosure(ROOT_PACKAGE, tagVersion, packument, {
-  pool: POOL,
-  onVisit: (name, meta) => { if (!captured.has(name)) captured.set(name, project(name, meta)); },
-});
+for (const [name, meta] of raw) {
+  const used = (manifestVersionsRead.get(name) ?? []).filter((v) => meta.versions?.[v] !== undefined);
+  captured.set(name, project(name, meta, used));
+}
 
 const fixture = {
   tag: tagVersion,
