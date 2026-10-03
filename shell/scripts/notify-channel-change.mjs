@@ -7,7 +7,7 @@
 //   prev 传 - 表示「没有历史快照」（首次运行），此时只记一笔不发通知。
 import { readFileSync, writeFileSync } from 'node:fs';
 
-import { buildChannelChangeCard, diffSnapshots } from './lib/feishu-card.mjs';
+import { buildChannelChangeCard, diffSnapshots, runUrlFromEnv } from './lib/feishu-card.mjs';
 
 const [prevArg, currentPath, cardOut] = process.argv.slice(2);
 if (prevArg === undefined || currentPath === undefined || cardOut === undefined) {
@@ -25,8 +25,7 @@ if (prevArg === undefined || currentPath === undefined || cardOut === undefined)
       repo: process.env.GITHUB_REPOSITORY ?? 'unknown',
       observedAt: current.observedAt,
       current,
-      runUrl: process.env.GITHUB_SERVER_URL + '/' + (process.env.GITHUB_REPOSITORY ?? '')
-        + '/actions/runs/' + (process.env.GITHUB_RUN_ID ?? ''),
+      runUrl: runUrlFromEnv(),
       detail: meaningful.map((c) => c.target + ' · ' + c.kind + ' · ' + (c.from ?? 'null') + ' → ' + (c.to ?? 'null')).join('\n'),
     });
     if (card === null) {

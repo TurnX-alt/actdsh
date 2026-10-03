@@ -10,7 +10,7 @@
 // spawnSync 会阻塞事件循环，服务无法接受连接，子进程只会一路 fetch 超时。
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -302,19 +302,42 @@ describe('pin-upstream.mjs 离线回放（0.2.0-rc.2 图：当前形态与发布
   });
 
   // 同一份 registry 驱动探针：poll 靠这个退出码决定空转还是构建，所以它必须可离线证伪。
+  // DSH_WAITING_OUT 那一份是 #41 的输入——工作流读的是 JSON，不是从散文里 grep 数字，
+  // 所以字段名、tag、缺失清单都要钉住；漏钉一个字段就是一张字段为 undefined 的卡片。
   test('发布竞态：探针在同一缺口上报退出码 3 并列出等待清单', async () => {
-    const { status, out } = await runProbe('rc2', { PIN_REPLAY_NOPUBLISH: SETTINGS });
-    assert.equal(status, 3, '退出码应为 3（等一轮），输出:\n' + out);
-    assert.match(out, /闭包尚未发布完整/);
-    assert.match(out, /缺 0\.2\.0-rc\.2：@deepseek-ai\/dsh-client-ui-settings-account/);
+    const dir = mkdtempSync(join(tmpdir(), 'actdsh-wait-'));
+    const waitingFile = join(dir, 'waiting-now.json');
+    try {
+      const { status, out } = await runProbe('rc2', { PIN_REPLAY_NOPUBLISH: SETTINGS, DSH_WAITING_OUT: waitingFile });
+      assert.equal(status, 3, '退出码应为 3（等一轮），输出:\n' + out);
+      assert.match(out, /闭包尚未发布完整/);
+      assert.match(out, /缺 0\.2\.0-rc\.2：@deepseek-ai\/dsh-client-ui-settings-account/);
+      const state = JSON.parse(readFileSync(waitingFile, 'utf8'));
+      assert.equal(state.schemaVersion, 1);
+      assert.equal(state.tag, '0.2.0-rc.2');
+      assert.deepEqual(state.missing, ['@deepseek-ai/dsh-client-ui-settings-account']);
+      assert.equal(state.missingCount, state.missing.length);
+      assert.ok(Number.isFinite(Date.parse(state.checkedAt)), 'checkedAt 必须是可比较的时间戳');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // 负控制的对照：闭包完整时探针必须报 0，否则「等一轮」会变成永远等、poll 天天空转。
-  test('发布竞态对照：闭包完整时探针退出码为 0，不报等待', async () => {
-    const { status, out } = await runProbe('rc2');
-    assert.equal(status, 0, out);
-    assert.doesNotMatch(out, /闭包尚未发布完整/);
-    assert.match(out, /探针通过/);
+  // 同时不能写出等待文件——工作流靠文件存在与否决定要不要更新状态，
+  // 写了就会把「已经在等的窗口」在正常轮次里继续留着，而 lastSeenAt 说谎。
+  test('发布竞态对照：闭包完整时探针退出码为 0，不报等待也不写状态文件', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'actdsh-wait-'));
+    const waitingFile = join(dir, 'waiting-now.json');
+    try {
+      const { status, out } = await runProbe('rc2', { DSH_WAITING_OUT: waitingFile });
+      assert.equal(status, 0, out);
+      assert.doesNotMatch(out, /闭包尚未发布完整/);
+      assert.match(out, /探针通过/);
+      assert.equal(existsSync(waitingFile), false, '没在等就不该产出等待状态文件');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   // #28 的落点：把「模型预测的树」与真实 npm 装出来的树逐包对账。

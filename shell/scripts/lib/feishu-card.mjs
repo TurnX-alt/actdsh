@@ -93,6 +93,18 @@ export function buildAlertCard(spec) {
  * 归一化探针读数成可比快照。只留会「变」的字段；URL 里的版本串与时间戳才是语义。
  * @param readings - [{ target, present, version?, declaredSize?, releaseDate? }]
  */
+/**
+ * 从 Actions 环境变量拼 run 链接。任何一项缺失就返回空串：
+ * 卡片上的按钮点了要能到地方，`undefined/x/actions/runs/` 这种链接比没有按钮更糟。
+ */
+export function runUrlFromEnv(env = process.env) {
+  const server = env.GITHUB_SERVER_URL;
+  const repo = env.GITHUB_REPOSITORY;
+  const runId = env.GITHUB_RUN_ID;
+  if (!server || !repo || !runId) return '';
+  return server.replace(/\/+$/, '') + '/' + repo + '/actions/runs/' + runId;
+}
+
 export function snapshotOf(readings, observedAt) {
   const targets = {};
   for (const r of readings) targets[r.target] = r.present
@@ -208,6 +220,26 @@ function annotationOf(line) {
     kv.join(' ').split(',').map((pair) => pair.split('=').map((s) => s.trim())).filter((p) => p.length === 2 && p[1] !== ''),
   );
   return { level, message, file: params.file, line: params.line };
+}
+
+/**
+ * 等待卡片（黄）。第三类信号：一直绿着一事无成。
+ * 已等时长由调用方算好传入——builder 里不读时钟，这样「超阈值那一刻」的判定才可测。
+ */
+export function buildWaitingCard(state, context) {
+  const hours = Number.isFinite(context.hours) ? context.hours.toFixed(1) : String(context.hours);
+  return buildAlertCard({
+    level: 'waiting',
+    title: '上游家族还没发齐 ' + state.tag,
+    subtitle: context.repo,
+    summary: '同一个 tag 已经等了 **' + hours + ' 小时**（阈值 '
+      + (context.thresholdHours ?? 12) + ' 小时），还差 ' + state.missingCount + ' 个包。\n\n'
+      + '实测发布窗口是 20–97 分钟。到这一步就不再是「等一轮」：要么上游没把家族发齐，'
+      + '要么我们的闭包判定已经和真实 registry 不一致了。',
+    metrics: [['tag', state.tag], ['已等', hours + ' h'], ['缺失', state.missingCount], ['首次等待', state.firstSeenAt]],
+    links: typeof context.runUrl === 'string' && context.runUrl !== '' ? [['查看本轮 run', context.runUrl]] : [],
+    detail: (state.missing ?? []).map((name) => '- ' + name).join('\n'),
+  });
 }
 
 /**
