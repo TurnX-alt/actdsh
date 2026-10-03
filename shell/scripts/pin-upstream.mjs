@@ -94,16 +94,17 @@ writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
 
 // 3. 单次安装（legacy 解析 + 硬超时；超时给出明确归因而非无界卡死）
 //
-// 安装前删掉带过来的 package-lock.json——那是上一次发布留下的树形状。独立线进入预发布形态后
-// 旧槽位的版本不再满足新声明，arborist 复用这些边时只把副本放到各依赖方底下、不再提升到顶层：
-// 2026-10-03 的 dsh-v0.2.1-alpha.1 实测，带旧 lock 时 cosmokit/schemastery 顶层「缺失」而闸门判红，
-// 同一目录只删 lock 就让三个独立线包全在顶层、版本正等于记录值（cordis 侥幸没事，因为它在我们
-// 显式声明的 peer 补齐里，从根直接装）。构建的可复现性来自上面写死的 dependencies 与 overrides，
-// 不是来自一份描述旧树的锁文件。
-const lockPath = 'package-lock.json';
-if (existsSync(lockPath)) {
-  rmSync(lockPath);
-  console.log('已删除上次发布留下的 package-lock.json（钉死靠显式版本，不靠旧树形状）');
+// 安装前把 lock 与 node_modules 都清掉，让这棵树从干净状态长出来。清单主张的是「记录的版本
+// 就是实际被加载的版本」，而 npm 的增量安装会沿用旧树/旧锁的边摆放：独立线进入预发布形态后
+// 旧槽位（cosmokit@1.8.2）不满足新声明（~1.8.6-alpha.1），arborist 于是只把副本放到各依赖方
+// 底下、不再提升到顶层，闸门判「顶层缺失」。2026-10-03 连着两次 runner 失败都栽在这上面：
+// run 37127833716 带提交进来的 lock 与「内置 pnpm」那步留下的 node_modules；把 lock 删掉后的
+// run 37135050384 仍旧红，因为那棵 pnpm 树还在。共同点不是某一份文件，而是「装之前这里已经有
+// 一棵树」。构建的可复现性来自上面写死的 dependencies 与 overrides，不来自旧的树形状。
+for (const stale of ['package-lock.json', 'node_modules']) {
+  if (!existsSync(stale)) continue;
+  rmSync(stale, { recursive: true, force: true });
+  console.log('已清除上次安装留下的 ' + stale + '（钉死靠显式版本，不靠旧树形状）');
 }
 const installStart = Date.now();
 try {
