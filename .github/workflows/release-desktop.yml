@@ -73,6 +73,7 @@ jobs:
         id: check
         env:
           DSH_WAITING_OUT: ${{ runner.temp }}/waiting-now.json
+          POLL_LOG: ${{ runner.temp }}/poll-output.txt
         run: |
           set -euo pipefail
           forced='${{ inputs.tag }}'
@@ -108,7 +109,9 @@ jobs:
           # 闭包还不完整的 registry，于是钉死步骤在发布窗口里抛错。退出码 3 表示「还没发齐」，
           # 等一轮就好；其它非零退出是区间形态/永远无解那类问题，必须让人来看。
           set +e
-          node shell/scripts/probe-upstream.mjs "$version"
+          # tee 一份是给失败通知步骤读的——run 红了以后 stdout 已经取不回来。
+          # pipefail 在本步开头就开着（set +e 只关 errexit），所以 closure_rc 仍是 node 的退出码。
+          node shell/scripts/probe-upstream.mjs "$version" | tee "${POLL_LOG:-/dev/null}"
           closure_rc=$?
           set -e
           if [ "$closure_rc" = 3 ]; then
@@ -152,6 +155,7 @@ jobs:
           fi
 
       - name: 保存等待状态
+        id: snapshot
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -159,6 +163,32 @@ jobs:
           path: ${{ runner.temp }}/waiting-state.json
           retention-days: 30
           if-no-files-found: ignore
+
+      # #29 的「红了」这一类，只接 poll。刻意不往 build / release job 插：那些步骤的日志里会出现
+      # npm 输出与产物链接，摘进面向群聊的卡片，风险大于收益。这条接线的边界要写明白——
+      # 2026-10-03 真正让发布红掉的是 build job 的「版本线钉死」，poll 这张卡片对它是静默的。
+      - name: 探测失败时通知飞书
+        if: >-
+          failure() && steps.waiting.conclusion != 'failure'
+          && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          DSH_FAIL_JOB: 探测上游新 tag
+          C_PREV: ${{ steps.waiting-prev.conclusion }}
+          C_CHECK: ${{ steps.check.conclusion }}
+          C_SNAPSHOT: ${{ steps.snapshot.conclusion }}
+        run: |
+          set -uo pipefail
+          # 步骤名按实际结论给：把没跑的步骤写进卡片就是假证。
+          step='checkout 或更早'
+          log=''
+          if [ "${C_CHECK:-}" = 'failure' ]; then
+            step='比对上游最新 dsh release、npm 可用性与本仓库已发布 tag'
+            log="$RUNNER_TEMP/poll-output.txt"
+          elif [ "${C_PREV:-}" = 'failure' ]; then step='取上一轮的等待状态'
+          elif [ "${C_SNAPSHOT:-}" = 'failure' ]; then step='保存等待状态'; fi
+          DSH_FAIL_STEP="$step" DSH_FAIL_LOG="$log" node shell/scripts/build-failure-card.mjs "$RUNNER_TEMP/poll-failure-card.json"
+          node shell/scripts/notify-feishu.mjs "$RUNNER_TEMP/poll-failure-card.json"
 
   build:
     name: 构建并验证 windows-x64
