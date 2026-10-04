@@ -1,0 +1,216 @@
+# 从上游源码构建一次官方形态的桌面版，并把构建输入与产物指纹记成一份留证。
+#
+# 这条线不声称「可复现构建」。Electron + pnpm 工具链不保证字节一致（下载时点、file key、时间戳
+# 都会进产物），我们从同一个 tag 重算出的哈希与官方不同，推不出任何关于篡改的结论。它主张的是
+# 另一件更小但能证实的事：在某组输入下产出了某串字节，输入与指纹一起公布，供他人在需要时复核。
+# 「官方通道声明的 sha512 是否等于 CDN 上真实字节」这一半由 release-desktop.yml 的发布闸门负责。
+#
+# 与 release-desktop.yml 的分工：那条线从 npm 取 @deepseek-ai/dsh 再套自制 Electron 壳，出的是
+# 免安装 zip；这条线 checkout 上游源码，用上游自己的 electron-builder 配置出包，Windows 产物是
+# 官方的 NSIS 安装器形态。
+#
+# 2026-10-04 起这条线登记在 main 上，触发只留 workflow_dispatch。原来它靠一条 paths 限定的
+# push 触发绕开「GitHub 只登记出现在默认分支上的 workflow，纯分支上的 workflow_dispatch 无法
+# 通过 API 派发」——代价是每次改到这个文件就白烧一次 120 分钟的 Windows 构建。搬到 main 之后
+# 登记问题自然解决，push 触发就不再需要，也不该留。
+#
+# 为什么非搬不可：#23 的最后一项要求「首次在 Windows runner 上 workflow_dispatch 跑通」。
+# 2026-09-26 那次 push 触发的运行（run 36214017258）其实已经把 NSIS 安装器打出来了，
+# 却在本仓库的留证脚本上失败——原因不是脚本有问题，而是这个 job 把上游仓库检出到了工作区根目录，
+#   actdsh 自己的文件当场被盖掉，最后一步自然找不到 shell/scripts/record-build-attestation.mjs。
+#
+# 平台覆盖只有 win-x64，原因在上游而不在本仓库：
+#   - apps/desktop/scripts/package-target.ts:237 把 --unsigned 限定为 win-x64
+#   - apps/desktop/scripts/desktop-release-environment.mjs:120 强制 macOS 打包必须提供
+#     Apple 凭据（APPLE_API_KEY 三件套 / APPLE_ID 三件套 / APPLE_KEYCHAIN_PROFILE 之一）
+#   - apps/desktop/scripts/electron-builder-config.mjs:66 在配置加载期就执行该校验，
+#     所以 --config.mac.notarize=false 绕不过去
+# 要加 macOS，得先有 Apple Developer ID 或 App Store Connect API Key。
+#
+# 留证这一步依赖本仓库的脚本，因此本仓库必须先检出到 actdsh-tools/，不能被上游检出盖掉。
+name: 官方桌面版打包
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 上游 tag（留空则自动取上游最新 dsh-v* release）
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  win-x64:
+    name: 官方打包 windows-x64（unsigned）
+    # 上游 package-target.ts:180 要求 win-x64 必须在 Windows x64 构建机上打，不支持交叉编译。
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      # 上游 monorepo 装依赖时默认堆会 OOM，release-desktop.yml 里有同样的实测记录。
+      NODE_OPTIONS: --max-old-space-size=4096
+      # 本 job 的 shell 是 Git Bash，PATH 里的 tar 是 GNU tar，它把 D:\... 的冒号当成
+      # host:path 远程语法，报 "Cannot connect to D: resolve failed"。上游 prepare:packages
+      # 用绝对路径调 tar -xOzf 读 tgz 里的 package.json，因此在 Windows 上必挂。
+      # --force-local 让 GNU tar 把带冒号的路径当本地文件；bsdtar 不读 TAR_OPTIONS，
+      # 所以这个变量对两种 tar 都安全。
+      TAR_OPTIONS: --force-local
+    steps:
+      - name: 解析目标 tag
+        id: target
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          requested='${{ inputs.tag }}'
+          if [ -n "$requested" ]; then
+            tag="$requested"
+          else
+            tag=$(gh api 'repos/deepseek-ai/deepseek-harness/releases?per_page=20' \
+              --jq '[.[] | select(.tag_name | startswith("dsh-v"))][0].tag_name')
+          fi
+          if [ -z "$tag" ]; then echo '::error::解析不到上游 dsh-v* tag'; exit 1; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "目标 tag: $tag"
+
+      # 先把本仓库检出到子目录：下一步的上游检出会占用工作区根目录，
+      # 那时本仓库的脚本就不存在了（2026-09-26 的失败就是这么来的）。
+      - name: 检出本仓库（留证脚本）
+        uses: actions/checkout@v6
+        with:
+          path: actdsh-tools
+          persist-credentials: false
+
+      - name: 检出上游源码
+        uses: actions/checkout@v6
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ steps.target.outputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: 记录工具链版本
+        run: |
+          node --version
+          pnpm --version
+          echo "上游 tag: ${{ steps.target.outputs.tag }}"
+          node -p "require('./package.json').version"
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # package-target.ts 顶层静态 import 了 macos-notarization-proxy.ts，后者依赖
+      # @deepseek-ai/node-addon-system/lib/flock.js。这个 lib/ 是 tsc 产物，而生成它的
+      # 命令（package-target.ts:462 的 pnpm --dir native/system run build:ts）写在脚本
+      # 自身内部，模块解析阶段就已经失败了。上游没有任何 workflow 调用 package:desktop，
+      # 所以这个顺序问题只在干净检出时暴露，得由调用方先补上。
+      - name: 预构建 native-system TypeScript
+        run: pnpm --dir native/system run build:ts
+
+      # package-target.ts 通过 loadDesktopPackageEnvironment 强制读取 apps/desktop/.env.windows，
+      # 该文件被上游 gitignore，属于发布操作员的本地配置，干净检出时必然缺失。
+      # unsigned 模式的校验在 desktop-package-environment.mjs:85 提前返回，只要求
+      # APP_ID / NPM_REGISTRY / 强制更新策略 / Windows 打包设置四项，不需要签名与更新源凭据。
+      #
+      # 下面两个 origin 是上游自己的占位值（见 scripts/test-windows-installer.mjs:50-52），
+      # 不是真实服务地址。产物里会烘进一条指向 test.example.com 的强制更新策略；
+      # unsigned 构建的 publish 为 null、没有自动更新源，且上游测试名显示策略失败是静默的
+      # （"keeps policy failures silent while an ordinary update proceeds"）。
+      # 若要对外发布，这两个 origin 该填什么需要先定。
+      - name: 生成 unsigned 构建所需的 .env.windows
+        working-directory: apps/desktop
+        run: |
+          cat > .env.windows <<'ENV'
+          DSH_DESKTOP_APP_ID=com.deepseek.harness
+          DSH_DESKTOP_AUTO_UPDATE_ENV=test
+          DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://test.example.com
+          DSH_DESKTOP_MANDATORY_UPDATE_CONFIG='{"allowedAuthOrigins":["https://login.example.com"]}'
+          DSH_DESKTOP_WINDOWS_SIGNATURE_CACHE_CONCURRENCY=4
+          ENV
+          cat .env.windows
+
+      # continue-on-error 的原因：electron-builder 出完 NSIS 安装器之后，package-target.ts
+      # 还会接着跑 smoke-packaged-runtime.ts，而该冒烟测试在本 runner 上会因 LibreOffice
+      # 的 xlsx→PDF 转换失败而中止（docx 通过，原生模块与 Host 启动均正常，
+      # 报 loadComponentFromURL returned an empty reference，属 Calc 组件加载问题）。
+      # 安装器此时已经生成，所以不让冒烟失败把产物一起丢掉；冒烟结论由最后一步显式上报，
+      # 不通过就让 job 变红，避免未验证的产物看起来像是绿的。
+      - name: 官方打包（unsigned）
+        id: package
+        continue-on-error: true
+        run: pnpm package:desktop:win:x64:unsigned
+
+      - name: 校验产物
+        id: artifact
+        working-directory: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts
+        run: |
+          set -euo pipefail
+          ls -la
+          installer=$(ls deepseek-harness-*-win-x64-unsigned.exe 2>/dev/null | head -1 || true)
+          if [ -z "$installer" ]; then
+            echo '::error::未找到 NSIS 安装器，electron-builder 实际未产出'
+            exit 1
+          fi
+          echo "安装器: $installer"
+          echo "大小: $(du -h "$installer" | cut -f1)"
+          sha256sum "$installer" | tee "$installer.sha256"
+          echo "installer=$PWD/$installer" >> "$GITHUB_OUTPUT"
+
+      # 本线的产出不是「一个能装的包」，而是「一次可核对的独立构建」：把输入（上游 commit、
+      # lockfile 哈希、工具链版本、命令序列）与输出（产物字节数与 sha256）绑在一份记录里。
+      # 它不声称可复现——Electron + pnpm 工具链不保证字节一致，重算哈希与官方不同推不出任何结论。
+      - name: 记录构建环境留证
+        run: |
+          set -euo pipefail
+          export REPO_ROOT="$PWD"
+          export UPSTREAM_REPO=deepseek-ai/deepseek-harness
+          export UPSTREAM_TAG='${{ steps.target.outputs.tag }}'
+          export UPSTREAM_COMMIT="$(git rev-parse HEAD)"
+          export LOCKFILE_PATH="$PWD/pnpm-lock.yaml"
+          export ARTIFACT_PATH='${{ steps.artifact.outputs.installer }}'
+          export NODE_VERSION="$(node --version)"
+          export PNPM_VERSION="$(pnpm --version)"
+          export RUNNER_IMAGE='${{ runner.image }}'
+          export COMMAND_SEQUENCE="$(printf '%s\n' 'pnpm install --frozen-lockfile' 'pnpm --dir native/system run build:ts' 'pnpm package:desktop:win:x64:unsigned')"
+          # 下面两个值取自上游 apps/desktop/.env.windows.example，是文档化占位值而非真实服务地址，
+          # 因此该产物不能作为对外发布的发行版；留证脚本会把这句备注一并写进记录。
+          export DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://test.example.com
+          export DSH_DESKTOP_MANDATORY_UPDATE_CONFIG='{"allowedAuthOrigins":["https://login.example.com"]}'
+          node actdsh-tools/shell/scripts/record-build-attestation.mjs "$(dirname "$ARTIFACT_PATH")/build-attestation.json"
+
+      - name: 上传产物与留证
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-win-x64-${{ steps.target.outputs.tag }}
+          path: |
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/deepseek-harness-*-win-x64-unsigned.exe.sha256
+            apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/build-attestation.json
+          if-no-files-found: error
+
+      - name: 冒烟测试结论
+        if: always()
+        run: |
+          if [ '${{ steps.package.outcome }}' != 'success' ]; then
+            echo '::warning::官方打包命令退出非零。NSIS 安装器已生成并上传，但其后的 smoke-packaged-runtime 冒烟测试未通过，产物未经官方冒烟验证。'
+            exit 1
+          fi
+          echo '官方打包与冒烟测试全部通过。'
