@@ -192,7 +192,10 @@ jobs:
           export ARTIFACT_PATH='${{ steps.artifact.outputs.installer }}'
           export NODE_VERSION="$(node --version)"
           export PNPM_VERSION="$(pnpm --version)"
+          # runner.image 在这个位置实测展开成空串（GitHub 对 run 块里的 runner 上下文有取舍），
+          # 所以再用 runner 自己带进来的 ImageVersion 兜底，两头都空就记 unknown。
           export RUNNER_IMAGE='${{ runner.image }}'
+          if [ -z "$RUNNER_IMAGE" ]; then export RUNNER_IMAGE="${ImageVersion:-}"; fi
           export COMMAND_SEQUENCE="$(printf '%s\n' 'pnpm install --frozen-lockfile' 'pnpm --dir native/system run build:ts' 'pnpm package:desktop:win:x64:unsigned')"
           # 下面两个值取自上游 apps/desktop/.env.windows.example，是文档化占位值而非真实服务地址，
           # 因此该产物不能作为对外发布的发行版；留证脚本会把这句备注一并写进记录。

@@ -97,3 +97,24 @@ test('未提供可选工具链字段时记为 unknown，而不是省略字段', 
   assert.deepEqual(record.toolchain, { node: 'unknown', pnpm: 'unknown', runnerImage: 'unknown' });
   assert.deepEqual(record.commands, []);
 });
+
+// 空字符串会一路穿到留证里，让一份缺字段的记录看起来仍然齐全——正是本脚本开头写明的
+// 「最糟的失效形态」。${{ runner.image }} 在 run 块里实测就是空串（run 37253893738 的
+// build-attestation.json 里 runnerImage 为 ""）。
+test('工具链字段为空时记成 unknown，而不是留一个空串', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'actdsh-attest-'));
+  try {
+    const lock = join(dir, 'pnpm-lock.yaml');
+    const artifact = join(dir, 'dsh-win-x64-unsigned.exe');
+    writeFileSync(lock, 'lockfileVersion: 9' + String.fromCharCode(10));
+    writeFileSync(artifact, 'installer bytes');
+    const attestation = buildAttestation({
+      UPSTREAM_REPO: 'deepseek-ai/deepseek-harness', UPSTREAM_TAG: 'dsh-v0.2.1-alpha.1',
+      UPSTREAM_COMMIT: '5badb150', LOCKFILE_PATH: lock, ARTIFACT_PATH: artifact,
+      NODE_VERSION: '', PNPM_VERSION: '  ', RUNNER_IMAGE: '',
+    }, '2026-10-05T00:00:00Z');
+    assert.deepEqual(attestation.toolchain, { node: 'unknown', pnpm: 'unknown', runnerImage: 'unknown' });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

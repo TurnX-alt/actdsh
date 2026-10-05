@@ -15,6 +15,10 @@ import { fileURLToPath } from 'node:url';
 
 const REQUIRED = ['UPSTREAM_REPO', 'UPSTREAM_TAG', 'UPSTREAM_COMMIT', 'LOCKFILE_PATH', 'ARTIFACT_PATH'];
 
+function known(value) {
+  return typeof value === 'string' && value.trim() !== '' ? value : 'unknown';
+}
+
 export function sha256OfFile(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
@@ -47,10 +51,12 @@ export function buildAttestation(env, now) {
       tag: env.UPSTREAM_TAG,
       commit: env.UPSTREAM_COMMIT,
     },
+    // ?? 只挡 undefined，空字符串会一路穿到留证里——那份记录看起来仍然齐全，却少了一个字段。
+    // 本脚本开头的标准就是「缺字段的留证最糟」，所以空串一律归到 unknown。
     toolchain: {
-      node: env.NODE_VERSION ?? 'unknown',
-      pnpm: env.PNPM_VERSION ?? 'unknown',
-      runnerImage: env.RUNNER_IMAGE ?? 'unknown',
+      node: known(env.NODE_VERSION),
+      pnpm: known(env.PNPM_VERSION),
+      runnerImage: known(env.RUNNER_IMAGE),
     },
     inputs: {
       lockfile: displayPath(env.LOCKFILE_PATH, env.REPO_ROOT),
