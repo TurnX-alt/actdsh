@@ -1,0 +1,112 @@
+# 连续失败的分诊：把「又红了」从一次性广播变成有记忆的判定。
+#
+# 为什么单独一个 workflow 而不是在各条线里各发各的卡片：去重与开票需要跨 run 的状态，
+# 而状态只有一个人写才不会打架。#29 的每条线自发卡片解决的是「有没有人知道」，
+# 这里解决的是「重复知不知道会不会让人学会不看」。
+#
+# 规则（判定在 shell/scripts/lib/failure-triage.mjs，这里有测试）：
+#   同一 workflow + job + step 的第 1 次红 → 发一张卡片
+#   第 2 次起 → 静默
+#   攒到第 3 次 → 自动开一张 issue，并随票发一张交代性的卡片，此后该签名静默
+#   那条 workflow 成功一次 → 计数复位（cron 晚 4–9 小时，所以复位条件不能是时间窗）
+#
+# 自指规避：被监控清单里**不含本 workflow**，否则一次开票动作把自己判红、自己再处理，就成了环。
+# workflow_run 事件总是跑默认分支上的这个文件，所以合并前它不会被触发。
+name: 失败分诊
+
+on:
+  workflow_run:
+    workflows:
+      - 桌面版发布
+      - 上游版本线探针
+      - 官方桌面版通道探针
+      - 官方桌面版打包
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read    # 读被失败 run 的日志与步骤结论，取自己的上一轮状态 artifact
+  issues: write    # 连续第 3 次红自动开票
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    name: 连续失败去重与开票
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      # 回溯找最近一个带 triage-state 的 run：不是每次分诊都会写（events 为空时也写，
+      # 但手动重放本 workflow 时可能没有），所以不能只看「上一次」。
+      - name: 取上一轮的分诊状态
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/prev"
+          for id in $(gh run list --workflow alert-triage.yml --limit 10 --json databaseId \
+            --jq '.[].databaseId' | grep -vx "$GITHUB_RUN_ID"); do
+            if gh run download "$id" -n triage-state -D "$RUNNER_TEMP/prev" >/dev/null 2>&1; then
+              echo "取回 run $id 的分诊状态"
+              cat "$RUNNER_TEMP/prev/triage-state.json"
+              exit 0
+            fi
+          done
+          echo "没有历史分诊状态（本轮起算）"
+
+      - name: 收集本次 run 的失败位置
+        env:
+          DSH_TRIAGE_RUN_ID: ${{ github.event.workflow_run.id }}
+          DSH_TRIAGE_RUN_URL: ${{ github.event.workflow_run.html_url }}
+          DSH_TRIAGE_WORKFLOW: ${{ github.event.workflow_run.name }}
+          DSH_TRIAGE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          DSH_TRIAGE_EVENT: ${{ github.event.workflow_run.event }}
+          DSH_TRIAGE_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -uo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$DSH_TRIAGE_RUN_ID/jobs?per_page=50" \
+            --jq '.jobs' > "$RUNNER_TEMP/events.json.jobs"
+          if [ "$DSH_TRIAGE_CONCLUSION" = 'failure' ]; then
+            gh run view "$DSH_TRIAGE_RUN_ID" --log > "$RUNNER_TEMP/run-log.txt" 2>/dev/null || true
+            export DSH_TRIAGE_LOG_FILE="$RUNNER_TEMP/run-log.txt"
+          fi
+          node shell/scripts/collect-triage-events.mjs "$RUNNER_TEMP/events.json"
+
+      - name: 判定、开票与出卡片
+        env:
+          # 建票是这条 workflow 独有的权力；本地跑同一个脚本默认不建票。
+          DSH_TRIAGE_ISSUES: "1"
+        run: |
+          set -uo pipefail
+          prev="$RUNNER_TEMP/prev/triage-state.json"
+          prev_arg=-
+          if [ -f "$prev" ]; then prev_arg="$prev"; fi
+          node shell/scripts/notify-triage.mjs "$prev_arg" "$RUNNER_TEMP/events.json" \
+            "$RUNNER_TEMP/triage-state.json" "$RUNNER_TEMP/cards"
+
+      - name: 发送卡片
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          set -uo pipefail
+          shopt -s nullglob
+          for card in "$RUNNER_TEMP"/cards/*.json; do
+            node shell/scripts/notify-feishu.mjs "$card"
+          done
+
+      - name: 保存分诊状态
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: triage-state
+          path: ${{ runner.temp }}/triage-state.json
+          retention-days: 30
+          if-no-files-found: warn
