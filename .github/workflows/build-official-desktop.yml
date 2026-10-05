@@ -27,7 +27,7 @@
 #     所以 --config.mac.notarize=false 绕不过去
 # 要加 macOS，得先有 Apple Developer ID 或 App Store Connect API Key。
 #
-# 留证这一步依赖本仓库的脚本，因此本仓库必须先检出到 actdsh-tools/，不能被上游检出盖掉。
+# 留证这一步依赖本仓库的脚本：本仓库检出到 actdsh-tools/，且必须排在上游检出之后。
 name: 官方桌面版打包
 
 on:
@@ -81,20 +81,24 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "目标 tag: $tag"
 
-      # 先把本仓库检出到子目录：下一步的上游检出会占用工作区根目录，
-      # 那时本仓库的脚本就不存在了（2026-09-26 的失败就是这么来的）。
-      - name: 检出本仓库（留证脚本）
-        uses: actions/checkout@v6
-        with:
-          path: actdsh-tools
-          persist-credentials: false
-
       - name: 检出上游源码
         uses: actions/checkout@v6
         with:
           repository: deepseek-ai/deepseek-harness
           ref: ${{ steps.target.outputs.tag }}
           fetch-depth: 1
+          persist-credentials: false
+
+      # 顺序不能反：actions/checkout 同步到某个目录时会先清空该目录，上游检出到工作区根目录
+      # 会连带删掉根下的子目录。上一版把本仓库放在前面，结果留证步骤报
+      # Cannot find module ...actdsh-tools/shell/scripts/record-build-attestation.mjs
+      # （run 37213411223，2026-10-04）。本仓库检到子目录里、且排在上游之后，就不会被清。
+      # 先把本仓库检出到子目录：下一步的上游检出会占用工作区根目录，
+      # 那时本仓库的脚本就不存在了（2026-09-26 的失败就是这么来的）。
+      - name: 检出本仓库（留证脚本）
+        uses: actions/checkout@v6
+        with:
+          path: actdsh-tools
           persist-credentials: false
 
       - name: 安装 pnpm
