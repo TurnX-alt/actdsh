@@ -66,7 +66,7 @@ export function buildAlertCard(spec) {
       tag: 'collapsible_panel',
       expanded: false,
       header: { title: plain('细节') },
-      border: { color: 'grey', thickness: '1px' },
+      border: { color: 'grey' },
       elements: [{ tag: 'markdown', content: spec.detail, text_size: 'notation' }],
     });
   }
