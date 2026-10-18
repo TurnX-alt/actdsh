@@ -87,6 +87,16 @@ test('卡片里出现目标名与「绿但变了」这句话', () => {
   assert.match(text, /绿灯不会告诉你/);
 });
 
+test('折叠面板 border 只含飞书接受的字段', () => {
+  const card = buildChannelChangeCard(
+    [{ target: 'mac-x64', kind: 'version', from: '0.2.0-rc.2', to: '0.2.1-rc.1' }],
+    { repo: 'TurnX-alt/actdsh', detail: '细节正文' },
+  );
+  const panel = card.card.body.elements.find((element) => element.tag === 'collapsible_panel');
+  assert.ok(panel, '带 detail 时应生成折叠面板');
+  assert.deepEqual(Object.keys(panel.border).sort(), ['color']);
+});
+
 // 自定义机器人是单向的：一旦混进 callback / form，卡片在飞书里会渲染成不可用控件。
 test('webhook 卡片里不得出现 callback、form 或输入控件', () => {
   for (const card of [
