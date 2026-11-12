@@ -1,0 +1,67 @@
+{
+  "icons": [
+    {
+      "name": "download",
+      "source": "https://api.iconify.design/lucide/download.svg",
+      "license": "ISC (lucide)",
+      "light": "download-light.svg",
+      "dark": "download-dark.svg"
+    },
+    {
+      "name": "git-compare",
+      "source": "https://api.iconify.design/lucide/git-compare.svg",
+      "license": "ISC (lucide)",
+      "light": "git-compare-light.svg",
+      "dark": "git-compare-dark.svg"
+    },
+    {
+      "name": "circle-help",
+      "source": "https://api.iconify.design/lucide/circle-help.svg",
+      "license": "ISC (lucide)",
+      "light": "circle-help-light.svg",
+      "dark": "circle-help-dark.svg"
+    },
+    {
+      "name": "workflow",
+      "source": "https://api.iconify.design/lucide/workflow.svg",
+      "license": "ISC (lucide)",
+      "light": "workflow-light.svg",
+      "dark": "workflow-dark.svg"
+    },
+    {
+      "name": "scale",
+      "source": "https://api.iconify.design/lucide/scale.svg",
+      "license": "ISC (lucide)",
+      "light": "scale-light.svg",
+      "dark": "scale-dark.svg"
+    },
+    {
+      "name": "shield-check",
+      "source": "https://api.iconify.design/lucide/shield-check.svg",
+      "license": "ISC (lucide)",
+      "light": "shield-check-light.svg",
+      "dark": "shield-check-dark.svg"
+    },
+    {
+      "name": "archive",
+      "source": "https://api.iconify.design/lucide/archive.svg",
+      "license": "ISC (lucide)",
+      "light": "archive-light.svg",
+      "dark": "archive-dark.svg"
+    },
+    {
+      "name": "microsoft",
+      "source": "https://unpkg.com/@lobehub/icons-static-svg@latest/icons/Microsoft.svg",
+      "license": "MIT (@lobehub/icons)",
+      "light": "microsoft-light.svg",
+      "dark": "microsoft-dark.svg"
+    },
+    {
+      "name": "apple",
+      "source": "https://unpkg.com/@lobehub/icons-static-svg@latest/icons/Apple.svg",
+      "license": "MIT (@lobehub/icons)",
+      "light": "apple-light.svg",
+      "dark": "apple-dark.svg"
+    }
+  ]
+}
