@@ -1,0 +1,64 @@
+# 独立校验面板的公开交付：构建静态单页并发布到 GitHub Pages。
+# 面板数据为打包快照，无运行时 API；base 路径与项目页 /actdsh/ 对齐。
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'panel/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 构建面板
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: panel/pnpm-lock.yaml
+
+      - name: 安装面板依赖
+        working-directory: panel
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建静态单页
+        working-directory: panel
+        run: pnpm build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: panel/dist
+
+  deploy:
+    name: 发布到 Pages
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
